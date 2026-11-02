@@ -1,0 +1,90 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 20:21:40 +0100
+Subject: [PATCH] Status bar: option to hide notification icons
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../binder/GraphiteHideNotificationIcons.kt   | 60 +++++++++++++++++++
+ .../ui/binder/HomeStatusBarViewBinder.kt      |  1 +
+ 2 files changed, 61 insertions(+)
+ create mode 100644 packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/binder/GraphiteHideNotificationIcons.kt
+
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/binder/GraphiteHideNotificationIcons.kt b/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/binder/GraphiteHideNotificationIcons.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..649b86be343ec763e03b19109da9fed4d2d75448
+--- /dev/null
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/binder/GraphiteHideNotificationIcons.kt
+@@ -0,0 +1,60 @@
++/*
++ * Copyright (C) 2026 Graphite
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.systemui.statusbar.pipeline.shared.ui.binder
++
++import android.database.ContentObserver
++import android.os.Handler
++import android.os.Looper
++import android.os.UserHandle
++import android.provider.Settings
++import android.view.View
++
++/** Graphite: optionally hides the status bar's notification icons, which sit beside the cutout. */
++object GraphiteHideNotificationIcons {
++    private const val SETTING = "graphite_hide_notification_icons"
++
++    @JvmStatic
++    fun bind(area: View) {
++        val resolver = area.context.contentResolver
++        fun update() {
++            val hide = Settings.Secure.getIntForUser(resolver, SETTING, 0, UserHandle.USER_CURRENT)
++            area.visibility = if (hide == 1) View.GONE else View.VISIBLE
++        }
++        val observer =
++            object : ContentObserver(Handler(Looper.getMainLooper())) {
++                override fun onChange(selfChange: Boolean) = update()
++            }
++        area.addOnAttachStateChangeListener(
++            object : View.OnAttachStateChangeListener {
++                override fun onViewAttachedToWindow(v: View) {
++                    resolver.registerContentObserver(
++                        Settings.Secure.getUriFor(SETTING),
++                        false,
++                        observer,
++                        UserHandle.USER_ALL,
++                    )
++                    update()
++                }
++
++                override fun onViewDetachedFromWindow(v: View) {
++                    resolver.unregisterContentObserver(observer)
++                }
++            }
++        )
++        update()
++    }
++}
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/binder/HomeStatusBarViewBinder.kt b/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/binder/HomeStatusBarViewBinder.kt
+index 8ece7f069dd46d9d62267ddba748dcb515b10e7b..05a525850fd088670d59f17c30733773a2543981 100644
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/binder/HomeStatusBarViewBinder.kt
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/binder/HomeStatusBarViewBinder.kt
+@@ -79,6 +79,7 @@ class HomeStatusBarViewBinderImpl @Inject constructor() : HomeStatusBarViewBinde
+         systemInfoView.hideInitially()
+         clockView.hideInitially()
+         notificationIconsArea.hideInitially()
++        GraphiteHideNotificationIcons.bind(view.requireViewById(R.id.notification_icon_area))
+ 
+         view.repeatWhenAttached {
+             repeatOnLifecycle(Lifecycle.State.CREATED) {

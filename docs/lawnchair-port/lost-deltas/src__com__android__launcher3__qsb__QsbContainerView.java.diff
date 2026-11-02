@@ -1,0 +1,103 @@
+diff --git a/src/com/android/launcher3/qsb/QsbContainerView.java b/src/com/android/launcher3/qsb/QsbContainerView.java
+index a787fb4363..904c0b1b82 100644
+--- a/src/com/android/launcher3/qsb/QsbContainerView.java
++++ b/src/com/android/launcher3/qsb/QsbContainerView.java
+@@ -12,6 +12,8 @@
+  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
++ *
++ * Modifications copyright 2025, Lawnchair
+  */
+ 
+ package com.android.launcher3.qsb;
+@@ -43,6 +45,7 @@ import androidx.annotation.Nullable;
+ import androidx.annotation.WorkerThread;
+ 
+ import com.android.launcher3.BuildConfig;
++import com.android.launcher3.BuildConfigs;
+ import com.android.launcher3.InvariantDeviceProfile;
+ import com.android.launcher3.LauncherAppState;
+ import com.android.launcher3.LauncherPrefs;
+@@ -89,7 +92,10 @@ public class QsbContainerView extends FrameLayout {
+     @WorkerThread
+     @Nullable
+     public static AppWidgetProviderInfo getSearchWidgetProviderInfo(@NonNull Context context) {
+-        String providerPkg = getSearchWidgetPackageName(context);
++        return getSearchWidgetProviderInfo(context, getSearchWidgetPackageName(context));
++    }
++
++    public static AppWidgetProviderInfo getSearchWidgetProviderInfo(@NonNull Context context, String providerPkg) {
+         if (providerPkg == null) {
+             return null;
+         }
+@@ -148,7 +154,7 @@ public class QsbContainerView extends FrameLayout {
+     }
+ 
+     protected void setPaddingUnchecked(int left, int top, int right, int bottom) {
+-        super.setPadding(left, top, right, bottom);
++        super.setPadding(0, 0, 0, 0);
+     }
+ 
+     /**
+@@ -185,7 +191,7 @@ public class QsbContainerView extends FrameLayout {
+         public View onCreateView(
+                 LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+ 
+-            mWrapper = new FrameLayout(getContext());
++            mWrapper = createWrapper(getContext());
+             // Only add the view when enabled
+             if (isQsbEnabled()) {
+                 mQsbWidgetHost.startListening();
+@@ -194,6 +200,11 @@ public class QsbContainerView extends FrameLayout {
+             return mWrapper;
+         }
+ 
++        @NonNull
++        protected FrameLayout createWrapper(@NonNull Context context) {
++            return new FrameLayout(context);
++        }
++
+         private View createQsb(ViewGroup container) {
+             mWidgetInfo = getSearchWidgetProvider();
+             if (mWidgetInfo == null) {
+@@ -290,7 +301,7 @@ public class QsbContainerView extends FrameLayout {
+         }
+ 
+         public boolean isQsbEnabled() {
+-            return BuildConfig.QSB_ON_FIRST_SCREEN;
++            return BuildConfigs.QSB_ON_FIRST_SCREEN;
+         }
+ 
+         protected Bundle createBindOptions() {
+@@ -302,18 +313,24 @@ public class QsbContainerView extends FrameLayout {
+         protected View getDefaultView(ViewGroup container, boolean showSetupIcon) {
+             // Return a default widget with setup icon.
+             View v = QsbWidgetHostView.getDefaultView(container);
+-            if (showSetupIcon) {
++            // pE-TODO(??): Why are we using isInPreviewMode() check to prevent crash?
++            if (showSetupIcon && !isInPreviewMode()) {
++                requestQsbCreate();
+                 View setupButton = v.findViewById(R.id.btn_qsb_setup);
+                 setupButton.setVisibility(View.VISIBLE);
+-                setupButton.setOnClickListener((v2) -> startActivityForResult(
+-                        new Intent(ACTION_APPWIDGET_BIND)
+-                                .putExtra(EXTRA_APPWIDGET_ID, mQsbWidgetHost.allocateAppWidgetId())
+-                                .putExtra(EXTRA_APPWIDGET_PROVIDER, mWidgetInfo.provider),
+-                        REQUEST_BIND_QSB));
++                setupButton.setOnClickListener((v2) -> requestQsbCreate());
+             }
+             return v;
+         }
+ 
++        void requestQsbCreate() {
++            startActivityForResult(
++                    new Intent(ACTION_APPWIDGET_BIND)
++                            .putExtra(EXTRA_APPWIDGET_ID, mQsbWidgetHost.allocateAppWidgetId())
++                            .putExtra(EXTRA_APPWIDGET_PROVIDER, mWidgetInfo.provider),
++                    REQUEST_BIND_QSB);
++        }
++
+ 
+         /**
+          * Returns a widget with category {@link AppWidgetProviderInfo#WIDGET_CATEGORY_SEARCHBOX}

@@ -1,0 +1,31 @@
+diff --git a/quickstep/src/com/android/quickstep/fallback/RecentsState.java b/quickstep/src/com/android/quickstep/fallback/RecentsState.java
+index b6ff5c51ed..bf5e68d23c 100644
+--- a/quickstep/src/com/android/quickstep/fallback/RecentsState.java
++++ b/quickstep/src/com/android/quickstep/fallback/RecentsState.java
+@@ -27,11 +27,14 @@ import android.graphics.Color;
+ import com.android.launcher3.DeviceProfile;
+ import com.android.launcher3.R;
+ import com.android.launcher3.statemanager.BaseState;
++import com.android.quickstep.RecentsActivity;
+ import com.android.launcher3.util.Themes;
+ import com.android.launcher3.views.ActivityContext;
+ import com.android.launcher3.views.ScrimColors;
+ import com.android.quickstep.views.RecentsViewContainer;
+ 
++import app.lawnchair.theme.color.tokens.ColorTokens;
++
+ /**
+  * State definition for Fallback recents
+  */
+@@ -166,9 +169,10 @@ public class RecentsState implements BaseState<RecentsState> {
+      * For this state, what color scrim should be drawn behind overview.
+      */
+     public ScrimColors getScrimColor(Context context) {
++        // Lawnchair-TODO-Colour: Check R.attr.overviewScrimColor
+         return new ScrimColors(
+                 /* backgroundColor */ hasFlag(FLAG_SCRIM)
+-                ? Themes.getAttrColor(context, R.attr.overviewScrimColor)
++                ? ColorTokens.OverviewScrim.resolveColor(context)
+                 : Color.TRANSPARENT,
+                 /* foregroundColor */ Color.TRANSPARENT);
+     }

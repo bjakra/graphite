@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 17:40:21 +0100
+Subject: [PATCH] SystemUI: don't list Graphite's system app under active apps
+
+GraphiteParts runs a foreground service only while Caffeine is on. That has its own notification
+with a stop action, so it doesn't need an entry in the active apps list.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../src/com/android/systemui/qs/FgsManagerController.kt    | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/packages/SystemUI/src/com/android/systemui/qs/FgsManagerController.kt b/packages/SystemUI/src/com/android/systemui/qs/FgsManagerController.kt
+index a5e1fa8463a8627992a6ca45f4b909b3e19ba4d7..557c9d998b8109db1d625053371b426a47d25619 100644
+--- a/packages/SystemUI/src/com/android/systemui/qs/FgsManagerController.kt
++++ b/packages/SystemUI/src/com/android/systemui/qs/FgsManagerController.kt
+@@ -738,6 +738,13 @@ constructor(
+         fun updateUiControl() {
+             backgroundRestrictionExemptionReason =
+                 activityManager.getBackgroundRestrictionExemptionReason(uid)
++            // Graphite: Graphite's system app only runs a service for Caffeine, which has its own
++            // notification with a stop action, so it isn't listed as an active app.
++            if (packageName == "org.graphite.parts") {
++                uiControl = UIControl.HIDE_ENTRY
++                uiControlInitialized = true
++                return
++            }
+             uiControl =
+                 when (backgroundRestrictionExemptionReason) {
+                     PowerExemptionManager.REASON_SYSTEM_UID,

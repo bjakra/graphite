@@ -1,0 +1,23 @@
+title = "FLAG_SECURE override for SystemUI's screen recorder"
+description = """
+SECURITY-RELEVANT (relaxes FLAG_SECURE, opt-in per app). While SystemUI's own screen recorder runs, WindowManager
+clears the layer secure bit for apps on graphite_secure_override_packages, so the recording shows them. Every other
+FLAG_SECURE window stays black, including the bouncer. Only the layer bit changes: WindowState.isSecureLocked() and
+thumbnails are unaffected, and device admin capture blocks still apply. New IWindowManager.setRecordingSecureOverride,
+only callable with STATUS_BAR_SERVICE; it ends with the recording or when SystemUI dies. Not covered: another capture
+that starts during the recording, such as a system cast, can briefly see these apps until the recording stops.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "Protected apps stay black in system screen recordings; the override list only applies to screenshots."
+category = "feature"
+depends = ["0420-secure-screenshot-override"]
+enabled = true
+notes = ""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0490-recorder-secure-override --project <path> --new
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"

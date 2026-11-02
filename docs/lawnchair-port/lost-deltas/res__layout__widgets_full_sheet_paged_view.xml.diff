@@ -1,0 +1,12 @@
+diff --git a/res/layout/widgets_full_sheet_paged_view.xml b/res/layout/widgets_full_sheet_paged_view.xml
+index ef60a91e6f..21f2c287c0 100644
+--- a/res/layout/widgets_full_sheet_paged_view.xml
++++ b/res/layout/widgets_full_sheet_paged_view.xml
+@@ -97,7 +97,6 @@
+             android:orientation="horizontal"
+             android:paddingBottom="8dp"
+             android:paddingHorizontal="@dimen/widget_list_horizontal_margin"
+-            android:background="?attr/widgetPickerPrimarySurfaceColor"
+             style="@style/TextHeadline"
+             launcher:layout_sticky="true">
+ 

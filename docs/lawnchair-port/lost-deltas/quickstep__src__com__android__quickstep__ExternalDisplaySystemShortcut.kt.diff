@@ -1,0 +1,13 @@
+diff --git a/quickstep/src/com/android/quickstep/ExternalDisplaySystemShortcut.kt b/quickstep/src/com/android/quickstep/ExternalDisplaySystemShortcut.kt
+index e8a9840dfc..3b20ae18b1 100644
+--- a/quickstep/src/com/android/quickstep/ExternalDisplaySystemShortcut.kt
++++ b/quickstep/src/com/android/quickstep/ExternalDisplaySystemShortcut.kt
+@@ -24,7 +24,7 @@ import com.android.launcher3.popup.SystemShortcut
+ import com.android.quickstep.views.RecentsView
+ import com.android.quickstep.views.RecentsViewContainer
+ import com.android.quickstep.views.TaskContainer
+-import com.android.window.flags.Flags
++import com.android.window.flags2.Flags
+ import com.android.wm.shell.shared.desktopmode.DesktopModeCompatPolicy
+ import com.android.wm.shell.shared.desktopmode.DesktopModeStatus
+ 

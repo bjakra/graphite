@@ -1,0 +1,10 @@
+# Officially supported GrapheneOS build host (Debian bookworm) + Node 24 for adevtool.
+# Used when GRAPHITE_CONTAINER=1 in graphite.conf (or graphite.local.conf).
+FROM docker.io/library/node:24-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git git-lfs python3 python-is-python3 curl ca-certificates gnupg openssh-client \
+        zip unzip rsync diffutils fontconfig fonts-dejavu-core hostname openssl \
+        procps xz-utils file bc cpio less nano \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g yarn@1.22.22 --force
+ENV LANG=C.UTF-8

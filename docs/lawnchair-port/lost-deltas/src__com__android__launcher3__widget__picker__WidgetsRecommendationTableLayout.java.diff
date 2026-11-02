@@ -1,0 +1,41 @@
+diff --git a/src/com/android/launcher3/widget/picker/WidgetsRecommendationTableLayout.java b/src/com/android/launcher3/widget/picker/WidgetsRecommendationTableLayout.java
+index 9ee9150031..a7b428f696 100644
+--- a/src/com/android/launcher3/widget/picker/WidgetsRecommendationTableLayout.java
++++ b/src/com/android/launcher3/widget/picker/WidgetsRecommendationTableLayout.java
+@@ -20,6 +20,7 @@ import static com.android.launcher3.widget.util.WidgetSizes.getWidgetSizePx;
+ import static com.android.launcher3.widget.util.WidgetsTableUtils.WIDGETS_TABLE_ROW_COUNT_COMPARATOR;
+ 
+ import static java.lang.Math.max;
++import static java.util.stream.Collectors.toList;
+ 
+ import android.content.Context;
+ import android.util.AttributeSet;
+@@ -29,6 +30,7 @@ import android.view.View;
+ import android.widget.TableLayout;
+ 
+ import androidx.annotation.Nullable;
++import androidx.core.view.ViewCompat;
+ import androidx.annotation.Px;
+ 
+ import com.android.launcher3.DeviceProfile;
+@@ -42,6 +44,8 @@ import java.util.ArrayList;
+ import java.util.List;
+ import java.util.stream.Collectors;
+ 
++import app.lawnchair.theme.drawable.DrawableTokens;
++
+ /** A {@link TableLayout} for showing recommended widgets. */
+ public final class WidgetsRecommendationTableLayout extends TableLayout {
+     private final float mWidgetsRecommendationTableVerticalPadding;
+@@ -76,6 +80,11 @@ public final class WidgetsRecommendationTableLayout extends TableLayout {
+         mWidgetCellOnClickListener = widgetCellOnClickListener;
+     }
+ 
++    @Override
++    protected void onFinishInflate() {
++        super.onFinishInflate();
++    }
++
+     /**
+      * Sets a list of recommended widgets that would like to be displayed in this table within the
+      * desired {@code recommendationTableMaxHeight}.

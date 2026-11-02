@@ -1,0 +1,31 @@
+diff --git a/src/com/android/launcher3/provider/RestoreDbTask.java b/src/com/android/launcher3/provider/RestoreDbTask.java
+index d2a9a43a5c..536faf684d 100644
+--- a/src/com/android/launcher3/provider/RestoreDbTask.java
++++ b/src/com/android/launcher3/provider/RestoreDbTask.java
+@@ -18,7 +18,7 @@ package com.android.launcher3.provider;
+ 
+ import static android.os.Process.myUserHandle;
+ 
+-import static com.android.launcher3.BuildConfig.WIDGETS_ENABLED;
++import static com.android.launcher3.BuildConfigs.WIDGETS_ENABLED;
+ import static com.android.launcher3.Flags.enableLauncherBrMetricsFixed;
+ import static com.android.launcher3.InvariantDeviceProfile.TYPE_MULTI_DISPLAY;
+ import static com.android.launcher3.LauncherPrefs.APP_WIDGET_IDS;
+@@ -31,6 +31,8 @@ import static com.android.launcher3.LauncherSettings.Favorites.ITEM_TYPE_APPWIDG
+ import static com.android.launcher3.provider.LauncherDbUtils.dropTable;
+ import static com.android.launcher3.widget.LauncherWidgetHolder.APPWIDGET_HOST_ID;
+ 
++import static java.util.stream.Collectors.toList;
++
+ import android.app.backup.BackupManager;
+ import android.appwidget.AppWidgetHost;
+ import android.appwidget.AppWidgetManager;
+@@ -205,7 +207,7 @@ public class RestoreDbTask {
+                 });
+     }
+ 
+-    private static boolean performRestore(Context context, ModelDbController controller) {
++    public static boolean performRestore(Context context, ModelDbController controller) {
+         SQLiteDatabase db = controller.getDb();
+         FileLog.d(TAG, "performRestore: starting restore from db");
+         try (SQLiteTransaction t = new SQLiteTransaction(db)) {

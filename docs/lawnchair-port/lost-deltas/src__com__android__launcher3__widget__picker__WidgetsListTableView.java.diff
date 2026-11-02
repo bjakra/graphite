@@ -1,0 +1,31 @@
+diff --git a/src/com/android/launcher3/widget/picker/WidgetsListTableView.java b/src/com/android/launcher3/widget/picker/WidgetsListTableView.java
+index d30e7b68ae..e85ec6defa 100644
+--- a/src/com/android/launcher3/widget/picker/WidgetsListTableView.java
++++ b/src/com/android/launcher3/widget/picker/WidgetsListTableView.java
+@@ -21,6 +21,11 @@ import android.widget.TableLayout;
+ 
+ import androidx.annotation.Nullable;
+ import androidx.annotation.UiThread;
++import androidx.core.view.ViewCompat;
++
++import com.android.launcher3.R;
++
++import app.lawnchair.theme.drawable.DrawableTokens;
+ 
+ /**
+  * Extension of {@link TableLayout} to support the drawable states used by
+@@ -46,6 +51,14 @@ public class WidgetsListTableView extends TableLayout {
+         refreshDrawableState();
+     }
+ 
++    @Override
++    protected void onFinishInflate() {
++        super.onFinishInflate();
++
++        var mContent = ViewCompat.requireViewById(this, R.id.widgets_table);
++        mContent.setBackground(DrawableTokens.WidgetsContentBackground.resolve(getContext()));
++    }
++
+     @Override
+     protected int[] onCreateDrawableState(int extraSpace) {
+         if (mListDrawableState == null) return super.onCreateDrawableState(extraSpace);

@@ -1,0 +1,18 @@
+title = "Status bar: option to hide notification icons"
+description = """
+Adds Secure setting graphite_hide_notification_icons (Parts, Status bar). When 1, the notification_icon_area in the status bar is GONE, keeping the area beside the camera cutout clear. The icons on the lock screen and the shade are not affected.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "No option to hide the status bar notification icons."
+category = "feature"
+depends = []
+enabled = true
+notes = ""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0500-hide-notification-icons --project <path> --new
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"

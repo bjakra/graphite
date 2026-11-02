@@ -1,0 +1,60 @@
+diff --git a/src/com/android/launcher3/popup/PopupContainerWithArrow.java b/src/com/android/launcher3/popup/PopupContainerWithArrow.java
+index 29969342eb..f938c11e3d 100644
+--- a/src/com/android/launcher3/popup/PopupContainerWithArrow.java
++++ b/src/com/android/launcher3/popup/PopupContainerWithArrow.java
+@@ -19,6 +19,7 @@ package com.android.launcher3.popup;
+ import static android.multiuser.Flags.enableMovingContentIntoPrivateSpace;
+ 
+ import static com.android.launcher3.LauncherSettings.Favorites.CONTAINER_SHORTCUTS;
++import static com.android.launcher3.Utilities.ATLEAST_BAKLAVA;
+ import static com.android.launcher3.Utilities.squaredHypot;
+ import static com.android.launcher3.Utilities.squaredTouchSlop;
+ import static com.android.launcher3.allapps.AlphabeticalAppsList.PRIVATE_SPACE_PACKAGE;
+@@ -53,6 +54,7 @@ import com.android.launcher3.DropTarget.DragObject;
+ import com.android.launcher3.Flags;
+ import com.android.launcher3.Launcher;
+ import com.android.launcher3.R;
++import com.android.launcher3.Utilities;
+ import com.android.launcher3.accessibility.LauncherAccessibilityDelegate;
+ import com.android.launcher3.accessibility.ShortcutMenuAccessibilityDelegate;
+ import com.android.launcher3.dragndrop.DragController;
+@@ -215,8 +217,27 @@ public class PopupContainerWithArrow<T extends Context & ActivityContext>
+         container = (PopupContainerWithArrow) launcher.getLayoutInflater().inflate(
+                 R.layout.popup_container, launcher.getDragLayer(), false);
+         container.configureForLauncher(launcher, item);
+-        boolean shouldHideSystemShortcuts = enableMovingContentIntoPrivateSpace()
++        
++        /* LC-Note: Fix for missing flags and account for NCDFE */
++        boolean shouldHideSystemShortcuts;
++        if (ATLEAST_BAKLAVA) {
++            boolean enableMovingContentIntoPrivateSpace = false;
++            try {
++                /* LC-Note: Some devices (Android 16 QPR) doesn't have or expose this flag to user. 
++                 * Let's assume no, because (the flags) enableMovingContentIntoPrivateSpace seems 
++                 * to be False for R8 by default.
++                 * */
++                enableMovingContentIntoPrivateSpace = enableMovingContentIntoPrivateSpace();
++            } catch (NoClassDefFoundError e) {
++                /* LC-Ignored: we already set it false by default. */
++            }
++            
++            shouldHideSystemShortcuts = enableMovingContentIntoPrivateSpace
+                 && Objects.equals(item.getTargetPackage(), PRIVATE_SPACE_PACKAGE);
++        } else {
++            shouldHideSystemShortcuts = false;
++        }
++        
+         container.populateAndShowRows(icon, deepShortcutCount,
+                 shouldHideSystemShortcuts ? Collections.emptyList() : systemShortcuts);
+         launcher.refreshAndBindWidgetsForPackageUser(PackageUserKey.fromItemInfo(item));
+@@ -278,7 +299,9 @@ public class PopupContainerWithArrow<T extends Context & ActivityContext>
+      * Animates and loads shortcuts on background thread for this popup container
+      */
+     private void loadAppShortcuts(ItemInfo originalItemInfo) {
+-        setAccessibilityPaneTitle(getTitleForAccessibility());
++        if (Utilities.ATLEAST_P) {
++            setAccessibilityPaneTitle(getTitleForAccessibility());
++        }
+         mOriginalIcon.setForceHideDot(true);
+         // All views are added. Animate layout from now on.
+         setLayoutTransition(new LayoutTransition());

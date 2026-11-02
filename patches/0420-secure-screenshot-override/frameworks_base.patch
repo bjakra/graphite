@@ -1,0 +1,235 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 22:19:35 +0100
+Subject: [PATCH] SystemUI: per-app FLAG_SECURE override for system screenshots
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../screenshot/GraphiteSecureOverride.kt      | 49 +++++++++++++++++++
+ .../systemui/screenshot/ImageCapture.kt       |  7 +++
+ .../systemui/screenshot/ImageCaptureImpl.kt   | 19 ++++++-
+ .../ScreenshotDetectionController.kt          |  5 ++
+ .../policy/PolicyRequestProcessor.kt          | 16 ++++--
+ .../policy/ScreenshotPolicyModule.kt          |  1 +
+ 6 files changed, 91 insertions(+), 6 deletions(-)
+ create mode 100644 packages/SystemUI/src/com/android/systemui/screenshot/GraphiteSecureOverride.kt
+
+diff --git a/packages/SystemUI/src/com/android/systemui/screenshot/GraphiteSecureOverride.kt b/packages/SystemUI/src/com/android/systemui/screenshot/GraphiteSecureOverride.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..f8795417782ae06048390c0cd05c9d6bb53836bf
+--- /dev/null
++++ b/packages/SystemUI/src/com/android/systemui/screenshot/GraphiteSecureOverride.kt
+@@ -0,0 +1,49 @@
++/*
++ * Copyright (C) 2026 Graphite
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.systemui.screenshot
++
++import android.content.Context
++import android.os.UserHandle
++import android.provider.Settings
++
++/**
++ * Graphite: per-app FLAG_SECURE override for *system* screenshots only.
++ *
++ * Apps listed in Settings.Secure `graphite_secure_override_packages` (comma-separated package
++ * names) keep FLAG_SECURE, so third-party capture, casting and recents thumbnails stay blacked
++ * out. Only SystemUI's own screenshots include their windows. With
++ * `graphite_secure_override_stealth` = 1, the app is also not told about the screenshot.
++ */
++object GraphiteSecureOverride {
++    const val PACKAGES = "graphite_secure_override_packages"
++    const val STEALTH = "graphite_secure_override_stealth"
++
++    fun isOverridden(context: Context?, packageName: String?): Boolean {
++        if (context == null || packageName.isNullOrEmpty()) return false
++        val list =
++            Settings.Secure.getStringForUser(
++                context.contentResolver, PACKAGES, UserHandle.USER_CURRENT
++            ) ?: return false
++        return list.split(',').any { it.trim() == packageName }
++    }
++
++    fun isStealth(context: Context?, packageName: String?): Boolean =
++        isOverridden(context, packageName) &&
++            Settings.Secure.getIntForUser(
++                context!!.contentResolver, STEALTH, 0, UserHandle.USER_CURRENT
++            ) == 1
++}
+diff --git a/packages/SystemUI/src/com/android/systemui/screenshot/ImageCapture.kt b/packages/SystemUI/src/com/android/systemui/screenshot/ImageCapture.kt
+index 77797601ca5a93aa176fb511391f1b8df369b0b3..4d9ebc062e6e6b38cd76ea9cd2d86a5b4f0110cc 100644
+--- a/packages/SystemUI/src/com/android/systemui/screenshot/ImageCapture.kt
++++ b/packages/SystemUI/src/com/android/systemui/screenshot/ImageCapture.kt
+@@ -22,5 +22,12 @@ interface ImageCapture {
+ 
+     fun captureDisplay(displayId: Int, crop: Rect? = null): Bitmap?
+ 
++    /**
++     * Graphite: like [captureDisplay], optionally including FLAG_SECURE layers. Only used for
++     * apps on the user's secure-override list.
++     */
++    fun captureDisplay(displayId: Int, crop: Rect?, captureSecure: Boolean): Bitmap? =
++        captureDisplay(displayId, crop)
++
+     suspend fun captureTask(taskId: Int): Bitmap?
+ }
+diff --git a/packages/SystemUI/src/com/android/systemui/screenshot/ImageCaptureImpl.kt b/packages/SystemUI/src/com/android/systemui/screenshot/ImageCaptureImpl.kt
+index c72a362d441344d2b5bf4719780520efc798637e..1a0042936c55aca85489cec3365c6b7203e4ab12 100644
+--- a/packages/SystemUI/src/com/android/systemui/screenshot/ImageCaptureImpl.kt
++++ b/packages/SystemUI/src/com/android/systemui/screenshot/ImageCaptureImpl.kt
+@@ -20,6 +20,7 @@ import android.app.IActivityTaskManager
+ import android.graphics.Bitmap
+ import android.graphics.Rect
+ import android.view.IWindowManager
++import android.window.ScreenCapture
+ import android.window.ScreenCaptureInternal
+ import android.window.ScreenCaptureInternal.CaptureArgs
+ import android.window.TaskSnapshotManager
+@@ -40,8 +41,22 @@ constructor(
+     @Background private val bgContext: CoroutineDispatcher,
+ ) : ImageCapture {
+ 
+-    override fun captureDisplay(displayId: Int, crop: Rect?): Bitmap? {
+-        val captureArgs = CaptureArgs.Builder().setSourceCrop(crop).build()
++    override fun captureDisplay(displayId: Int, crop: Rect?): Bitmap? =
++        captureDisplay(displayId, crop, captureSecure = false)
++
++    override fun captureDisplay(displayId: Int, crop: Rect?, captureSecure: Boolean): Bitmap? {
++        val captureArgs =
++            CaptureArgs.Builder()
++                .setSourceCrop(crop)
++                .apply {
++                    // Graphite: system screenshot of an app on the secure-override list
++                    if (captureSecure) {
++                        setSecureContentPolicy(
++                            ScreenCapture.ScreenCaptureParams.SECURE_CONTENT_POLICY_CAPTURE
++                        )
++                    }
++                }
++                .build()
+         val syncScreenCapture = ScreenCaptureInternal.createSyncCaptureListener()
+         windowManager.captureDisplay(displayId, captureArgs, syncScreenCapture)
+         val buffer = syncScreenCapture.getBuffer()
+diff --git a/packages/SystemUI/src/com/android/systemui/screenshot/ScreenshotDetectionController.kt b/packages/SystemUI/src/com/android/systemui/screenshot/ScreenshotDetectionController.kt
+index 4bf6c962713aa1faceeecc050152fcbffa7aeb3e..37cb62024a3ce9c93472b0606c9f847b47b0fb4c 100644
+--- a/packages/SystemUI/src/com/android/systemui/screenshot/ScreenshotDetectionController.kt
++++ b/packages/SystemUI/src/com/android/systemui/screenshot/ScreenshotDetectionController.kt
+@@ -16,6 +16,7 @@
+ 
+ package com.android.systemui.screenshot
+ 
++import android.content.Context
+ import android.content.pm.PackageManager
+ import android.content.pm.PackageManager.ComponentInfoFlags
+ import android.content.pm.PackageManager.MATCH_ANY_USER
+@@ -25,6 +26,7 @@ import android.view.IWindowManager
+ import android.view.ViewGroup
+ import android.view.WindowManager
+ import android.widget.TextView
++import com.android.systemui.dagger.qualifiers.Application
+ import com.android.systemui.res.R
+ import javax.inject.Inject
+ 
+@@ -33,6 +35,7 @@ class ScreenshotDetectionController
+ constructor(
+     private val windowManager: IWindowManager,
+     private val packageManager: PackageManager,
++    @param:Application private val context: Context,
+ ) {
+     /**
+      * Notify potentially listening apps of the screenshot. Return a list of the names of the apps
+@@ -41,6 +44,8 @@ constructor(
+     fun maybeNotifyOfScreenshot(data: ScreenshotData): List<CharSequence> {
+         // No notification for screenshots from overview.
+         if (data.source == WindowManager.ScreenshotSource.SCREENSHOT_OVERVIEW) return listOf()
++        // Graphite: stealth screenshots of apps on the secure-override list
++        if (GraphiteSecureOverride.isStealth(context, data.topComponent?.packageName)) return listOf()
+ 
+         // Notify listeners, retrieve a list of listening components.
+         val components = windowManager.notifyScreenshotListeners(Display.DEFAULT_DISPLAY)
+diff --git a/packages/SystemUI/src/com/android/systemui/screenshot/policy/PolicyRequestProcessor.kt b/packages/SystemUI/src/com/android/systemui/screenshot/policy/PolicyRequestProcessor.kt
+index 0fa50afffcc49b613dad418bf027fd416e9d1722..993c388a9e1bc045347a2456199816e7d77fa96e 100644
+--- a/packages/SystemUI/src/com/android/systemui/screenshot/policy/PolicyRequestProcessor.kt
++++ b/packages/SystemUI/src/com/android/systemui/screenshot/policy/PolicyRequestProcessor.kt
+@@ -19,6 +19,7 @@ package com.android.systemui.screenshot.policy
+ import android.app.ActivityTaskManager.RootTaskInfo
+ import android.app.WindowConfiguration
+ import android.content.ComponentName
++import android.content.Context
+ import android.graphics.Bitmap
+ import android.graphics.Rect
+ import android.os.Process.myUserHandle
+@@ -29,6 +30,7 @@ import android.view.WindowManager.TAKE_SCREENSHOT_PROVIDED_IMAGE
+ import com.android.systemui.Flags.screenshotDisableLongScreenshotForSystemShade
+ import com.android.systemui.dagger.qualifiers.Background
+ import com.android.systemui.screencapture.record.domain.interactor.ScreenCaptureRecordFeaturesInteractor
++import com.android.systemui.screenshot.GraphiteSecureOverride
+ import com.android.systemui.screenshot.ImageCapture
+ import com.android.systemui.screenshot.ScreenshotData
+ import com.android.systemui.screenshot.ScreenshotRequestProcessor
+@@ -55,6 +57,8 @@ class PolicyRequestProcessor(
+     /** The assigned component when no application has focus, or not visible */
+     private val defaultComponent: ComponentName,
+     private val screenCaptureRecordFeaturesInteractor: ScreenCaptureRecordFeaturesInteractor,
++    /** Graphite: reads the secure-override settings */
++    private val context: Context? = null,
+ ) : ScreenshotRequestProcessor {
+     override suspend fun process(original: ScreenshotData): ScreenshotData {
+ 
+@@ -107,7 +111,8 @@ class PolicyRequestProcessor(
+                 Log.i(TAG, "Capturing screenshot: $params")
+ 
+                 val screenshot =
+-                    captureDisplay(type.displayId) ?: error("Failed to capture screenshot")
++                    captureDisplay(type.displayId, params.contentTask.component?.packageName)
++                        ?: error("Failed to capture screenshot")
+                 return original.copy(
+                     type = TAKE_SCREENSHOT_FULLSCREEN,
+                     bitmap = screenshot,
+@@ -173,7 +178,9 @@ class PolicyRequestProcessor(
+         taskId: Int? = null,
+     ): ScreenshotData {
+         Log.i(TAG, "Capturing screenshot: $componentName / $owner")
+-        val screenshot = captureDisplay(displayId) ?: error("Failed to capture screenshot")
++        val screenshot =
++            captureDisplay(displayId, componentName?.packageName)
++                ?: error("Failed to capture screenshot")
+         return original.copy(
+             type = TAKE_SCREENSHOT_FULLSCREEN,
+             bitmap = screenshot,
+@@ -195,7 +202,8 @@ class PolicyRequestProcessor(
+     }
+ 
+     /** TODO: Move to ImageCapture (existing function is non-suspending) */
+-    private suspend fun captureDisplay(displayId: Int): Bitmap? {
+-        return withContext(background) { capture.captureDisplay(displayId) }
++    private suspend fun captureDisplay(displayId: Int, topPackage: String? = null): Bitmap? {
++        val captureSecure = GraphiteSecureOverride.isOverridden(context, topPackage)
++        return withContext(background) { capture.captureDisplay(displayId, null, captureSecure) }
+     }
+ }
+diff --git a/packages/SystemUI/src/com/android/systemui/screenshot/policy/ScreenshotPolicyModule.kt b/packages/SystemUI/src/com/android/systemui/screenshot/policy/ScreenshotPolicyModule.kt
+index dc35715e5a5019dd53ed0120865ff42fa0bfeb49..6ef2e6eafe9f2d6e790c2aef438268f03e509ad2 100644
+--- a/packages/SystemUI/src/com/android/systemui/screenshot/policy/ScreenshotPolicyModule.kt
++++ b/packages/SystemUI/src/com/android/systemui/screenshot/policy/ScreenshotPolicyModule.kt
+@@ -80,6 +80,7 @@ interface ScreenshotPolicyModule {
+                     ComponentName(context.packageName, SystemUIService::class.java.toString()),
+                 policy = standardPolicy,
+                 screenCaptureRecordFeaturesInteractor = screenCaptureRecordFeaturesInteractor,
++                context = context,
+             )
+         }
+     }

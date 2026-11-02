@@ -1,0 +1,20 @@
+title = "SystemUI: lock screen weather from Graphite Weather"
+description = """
+Adds GraphiteWeather to SystemUI: reads content://org.graphite.weather.data/current on change and after unlock
+and passes it to KeyguardUpdateMonitor.sendWeatherData, which feeds the lock screen clocks. Upstream only gets
+weather through a smartspace session, which SystemUI starts only with Google's data plugin.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "No weather on the lock screen clocks."
+category = "feature"
+depends = []
+enabled = true
+notes = ""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0470-graphite-weather --project <path> --new
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"

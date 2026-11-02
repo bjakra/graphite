@@ -1,0 +1,254 @@
+diff --git a/src/com/android/launcher3/icons/IconCache.java b/src/com/android/launcher3/icons/IconCache.java
+index a7381f34eb..1fe4c6d11f 100644
+--- a/src/com/android/launcher3/icons/IconCache.java
++++ b/src/com/android/launcher3/icons/IconCache.java
+@@ -22,7 +22,6 @@ import static com.android.launcher3.util.Executors.MAIN_EXECUTOR;
+ import static com.android.launcher3.util.Executors.MODEL_EXECUTOR;
+ import static com.android.launcher3.util.LooperExecutor.CALLER_ICON_CACHE;
+ import static com.android.launcher3.widget.WidgetSections.NO_CATEGORY;
+-
+ import static java.util.stream.Collectors.groupingBy;
+ 
+ import android.content.ComponentName;
+@@ -50,6 +49,7 @@ import androidx.core.util.Pair;
+ 
+ import com.android.launcher3.Flags;
+ import com.android.launcher3.InvariantDeviceProfile;
++import com.android.launcher3.LauncherSettings.Favorites;
+ import com.android.launcher3.Utilities;
+ import com.android.launcher3.dagger.ApplicationContext;
+ import com.android.launcher3.dagger.LauncherAppSingleton;
+@@ -57,7 +57,6 @@ import com.android.launcher3.icons.cache.BaseIconCache;
+ import com.android.launcher3.icons.cache.CacheLookupFlag;
+ import com.android.launcher3.icons.cache.CachedObject;
+ import com.android.launcher3.icons.cache.CachedObjectCachingLogic;
+-import com.android.launcher3.icons.cache.LauncherActivityCachingLogic;
+ import com.android.launcher3.logging.FileLog;
+ import com.android.launcher3.model.data.AppInfo;
+ import com.android.launcher3.model.data.IconRequestInfo;
+@@ -71,6 +70,7 @@ import com.android.launcher3.shortcuts.ShortcutRequest;
+ import com.android.launcher3.util.CancellableTask;
+ import com.android.launcher3.util.ComponentKey;
+ import com.android.launcher3.util.DaggerSingletonTracker;
++import com.android.launcher3.util.FlagOp;
+ import com.android.launcher3.util.InstantAppResolver;
+ import com.android.launcher3.util.PackageUserKey;
+ import com.android.launcher3.widget.WidgetSections;
+@@ -87,6 +87,10 @@ import java.util.stream.Stream;
+ import javax.inject.Inject;
+ import javax.inject.Named;
+ 
++import app.lawnchair.LawnchairActivityCachingLogic;
++import app.lawnchair.gestures.ui.LawnchairShortcutActivity;
++import app.lawnchair.icons.LawnchairIconProvider;
++
+ /**
+  * Cache of application icons.  Icons can be made from any thread.
+  */
+@@ -113,14 +117,14 @@ public class IconCache extends BaseIconCache {
+     private final SparseArray<BitmapInfo> mWidgetCategoryBitmapInfos;
+ 
+     private int mPendingIconRequestCount = 0;
+-
++    
+     @Inject
+     public IconCache(
+             @ApplicationContext Context context,
+             InvariantDeviceProfile idp,
+             @Nullable @Named("ICONS_DB") String dbFileName,
+             UserCache userCache,
+-            LauncherIconProvider iconProvider,
++            LawnchairIconProvider iconProvider,
+             InstallSessionHelper installSessionHelper,
+             LauncherIcons.IconPool iconPool,
+             InstantAppResolver instantAppResolver,
+@@ -141,6 +145,31 @@ public class IconCache extends BaseIconCache {
+         lifecycle.addCloseable(this::close);
+     }
+ 
++    public IconCache(
++        @ApplicationContext Context context,
++        InvariantDeviceProfile idp,
++        @Nullable @Named("ICONS_DB") String dbFileName,
++        UserCache userCache,
++        IconProvider iconProvider,
++        InstallSessionHelper installSessionHelper,
++        LauncherIcons.IconPool iconPool,
++        DaggerSingletonTracker lifecycle) {
++        super(context, dbFileName, MODEL_EXECUTOR.getLooper(),
++            idp.fillResIconDpi, Math.max(idp.iconBitmapSize, idp.allAppsIconBitmapSize), true /* inMemoryCache */, iconProvider);
++        mLauncherApps = context.getSystemService(LauncherApps.class);
++        mUserManager = userCache;
++        mInstallSessionHelper = installSessionHelper;
++        mIconPool = iconPool;
++
++        mInstantAppResolver = InstantAppResolver.newInstance(context);
++        mWidgetCategoryBitmapInfos = new SparseArray<>();
++
++        mCancelledTask = new CancellableTask(() -> null, MAIN_EXECUTOR, c -> { });
++        mCancelledTask.cancel();
++
++        lifecycle.addCloseable(this::close);
++    }
++
+     @Override
+     public long getSerialNumberForUser(@NonNull UserHandle user) {
+         return mUserManager.getSerialNumberForUser(user);
+@@ -157,21 +186,24 @@ public class IconCache extends BaseIconCache {
+         return mIconPool.obtain();
+     }
+ 
++    /**
+     /**
+      * Updates the entries related to the given package in memory and persistent DB.
+      */
+     public synchronized void updateIconsForPkg(@NonNull final String packageName,
+             @NonNull final UserHandle user) {
+         List<LauncherActivityInfo> apps = mLauncherApps.getActivityList(packageName, user);
+-        if (Flags.restoreArchivedAppIconsFromDb()
+-                && apps.stream().anyMatch(app -> app.getApplicationInfo().isArchived)) {
+-            // When archiving app icon, don't delete old icon so it can be re-used.
+-            return;
++        if (Utilities.ATLEAST_V) {
++            if (Flags.restoreArchivedAppIconsFromDb()
++                    && apps.stream().anyMatch(app -> app.getApplicationInfo().isArchived)) {
++                // When archiving app icon, don't delete old icon so it can be re-used.
++                return;
++            }
+         }
+         removeIconsForPkg(packageName, user);
+         long userSerial = mUserManager.getSerialNumberForUser(user);
+         for (LauncherActivityInfo app : apps) {
+-            addIconToDBAndMemCache(app, LauncherActivityCachingLogic.INSTANCE, userSerial);
++            addIconToDBAndMemCache(app, LawnchairActivityCachingLogic.INSTANCE.get(context), userSerial);
+         }
+     }
+ 
+@@ -239,7 +271,7 @@ public class IconCache extends BaseIconCache {
+      */
+     public synchronized void updateTitleAndIcon(AppInfo application) {
+         CacheEntry entry = cacheLocked(application.componentName,
+-                application.user, () -> null, LauncherActivityCachingLogic.INSTANCE,
++            application.user, () -> null, LawnchairActivityCachingLogic.INSTANCE.get(context),
+                 application.getMatchingLookupFlag());
+         if (entry.bitmap != null || !isDefaultIcon(entry.bitmap, application.user)) {
+             applyCacheEntry(entry, application);
+@@ -252,8 +284,8 @@ public class IconCache extends BaseIconCache {
+     @SuppressWarnings("NewApi")
+     public synchronized void getTitleAndIcon(ItemInfoWithIcon info,
+             LauncherActivityInfo activityInfo, @NonNull CacheLookupFlag lookupFlag) {
+-        boolean isAppArchived = Flags.enableSupportForArchiving() && activityInfo != null
+-                && activityInfo.getActivityInfo().isArchived;
++        boolean isAppArchived = Utilities.ATLEAST_V && (Flags.enableSupportForArchiving() && activityInfo != null
++                && activityInfo.getActivityInfo().isArchived);
+         // If we already have activity info, no need to use package icon
+         getTitleAndIcon(info, () -> activityInfo, lookupFlag.withUsePackageIcon(isAppArchived));
+     }
+@@ -293,7 +325,10 @@ public class IconCache extends BaseIconCache {
+         if (isDefaultIcon(bitmapInfo, user) && fallbackIconCheck.test(info)) {
+             return;
+         }
+-        info.bitmap = bitmapInfo.withBadgeInfo(getShortcutInfoBadge(si.getShortcutInfo()));
++
++        info.bitmap = LawnchairShortcutActivity.Companion.shouldSkipShortcutBadge(context, si.getShortcutInfo())
++            ? bitmapInfo.withFlags(FlagOp.NO_OP)
++            : bitmapInfo.withBadgeInfo(getShortcutInfoBadge(si.getShortcutInfo()));
+     }
+ 
+     /**
+@@ -303,6 +338,15 @@ public class IconCache extends BaseIconCache {
+         return getShortcutInfoBadgeItem(shortcutInfo).bitmap;
+     }
+ 
++    /**
++     * LC-Note: Returns the package icon to use as the badge for a shortcut.
++     */
++    public BitmapInfo getShortcutInfoBadge(String packageName, UserHandle user) {
++        PackageItemInfo pkgInfo = new PackageItemInfo(packageName, user);
++        getTitleAndIconForApp(pkgInfo, DEFAULT_LOOKUP_FLAG);
++        return pkgInfo.bitmap;
++    }
++
+     @VisibleForTesting
+     protected ItemInfoWithIcon getShortcutInfoBadgeItem(ShortcutInfo shortcutInfo) {
+         // Check for badge override first.
+@@ -339,6 +383,9 @@ public class IconCache extends BaseIconCache {
+     public synchronized void getTitleAndIcon(
+             @NonNull ItemInfoWithIcon info,
+             @NonNull CacheLookupFlag lookupFlag) {
++        if (info.itemType == Favorites.ITEM_TYPE_SHORTCUT) {
++            return;
++        }
+         // null info means not installed, but if we have a component from the intent then
+         // we should still look in the cache for restored app icons.
+         if (info.getTargetComponent() == null) {
+@@ -357,7 +404,10 @@ public class IconCache extends BaseIconCache {
+                     CacheableShortcutCachingLogic.INSTANCE,
+                     lookupFlag.withSkipAddToMemCache());
+             applyCacheEntry(entry, info);
+-            info.bitmap = info.bitmap.withBadgeInfo(getShortcutInfoBadge(si));
++
++            if (!LawnchairShortcutActivity.Companion.shouldSkipShortcutBadge(context, si)) {
++                info.bitmap = info.bitmap.withBadgeInfo(getShortcutInfoBadge(si));
++            }
+         } else {
+             Intent intent = info.getIntent();
+             getTitleAndIcon(info, () -> mLauncherApps.resolveActivity(intent, info.user),
+@@ -383,7 +433,7 @@ public class IconCache extends BaseIconCache {
+             @NonNull Supplier<LauncherActivityInfo> activityInfoProvider,
+             @NonNull CacheLookupFlag lookupFlag) {
+         CacheEntry entry = cacheLocked(infoInOut.getTargetComponent(), infoInOut.user,
+-                activityInfoProvider, LauncherActivityCachingLogic.INSTANCE, lookupFlag);
++            activityInfoProvider, LawnchairActivityCachingLogic.INSTANCE.get(context), lookupFlag);
+         applyCacheEntry(entry, infoInOut);
+     }
+ 
+@@ -423,6 +473,12 @@ public class IconCache extends BaseIconCache {
+         Map<Pair<UserHandle, CacheLookupFlag>, List<IconRequestInfo<T>>> iconLoadSubsectionsMap =
+                 iconRequestInfos.stream()
+                         .filter(iconRequest -> {
++                            // LC-Note:
++                            // Legacy shortcuts have custom icons and must not be replaced by
++                            // the icon of the launch target.
++                            if (iconRequest.itemInfo.itemType == Favorites.ITEM_TYPE_SHORTCUT) {
++                                return false;
++                            }
+                             if (iconRequest.itemInfo.getTargetComponent() == null) {
+                                 Log.i(TAG,
+                                         "Skipping Item info with null component name: "
+@@ -484,7 +540,7 @@ public class IconCache extends BaseIconCache {
+                                 cn,
+                                 /* user = */ sectionKey.first,
+                                 () -> duplicateIconRequests.get(0).launcherActivityInfo,
+-                                LauncherActivityCachingLogic.INSTANCE,
++                            LawnchairActivityCachingLogic.INSTANCE.get(context),
+                                 sectionKey.second,
+                                 c);
+ 
+@@ -533,7 +589,7 @@ public class IconCache extends BaseIconCache {
+                     loadFallbackIcon(
+                             lai,
+                             entry,
+-                            LauncherActivityCachingLogic.INSTANCE,
++                        LawnchairActivityCachingLogic.INSTANCE.get(context),
+                             DEFAULT_LOOKUP_FLAG.withUsePackageIcon(false),
+                             /* usePackageTitle= */ loadFallbackTitle,
+                             cn,
+@@ -543,7 +599,7 @@ public class IconCache extends BaseIconCache {
+                     loadFallbackTitle(
+                             lai,
+                             entry,
+-                            LauncherActivityCachingLogic.INSTANCE,
++                        LawnchairActivityCachingLogic.INSTANCE.get(context),
+                             sectionKey.first);
+                 }
+ 
+@@ -637,7 +693,7 @@ public class IconCache extends BaseIconCache {
+     @VisibleForTesting
+     synchronized boolean isItemInDb(ComponentKey cacheKey) {
+         return getEntryFromDBLocked(cacheKey, new CacheEntry(), DEFAULT_LOOKUP_FLAG,
+-                LauncherActivityCachingLogic.INSTANCE);
++            LawnchairActivityCachingLogic.INSTANCE.get(context));
+     }
+ 
+     /**

@@ -1,0 +1,304 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 20:21:40 +0100
+Subject: [PATCH] Let SystemUI's screen recorder capture apps on the override
+ list
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ core/java/android/view/IWindowManager.aidl    |  7 ++
+ .../screenrecord/GraphiteRecorderOverride.kt  | 63 ++++++++++++++++
+ .../screenrecord/ScreenMediaRecorder.java     | 19 ++++-
+ .../server/wm/RootWindowContainer.java        |  2 +-
+ .../server/wm/WindowManagerService.java       | 72 ++++++++++++++++++-
+ .../com/android/server/wm/WindowState.java    | 14 +++-
+ 6 files changed, 173 insertions(+), 4 deletions(-)
+ create mode 100644 packages/SystemUI/src/com/android/systemui/screenrecord/GraphiteRecorderOverride.kt
+
+diff --git a/core/java/android/view/IWindowManager.aidl b/core/java/android/view/IWindowManager.aidl
+index c0248e560608cf2ff61c1ecb251a7a3f6af748e5..9729b565b28b34d6121582282e2182741f3bf675 100644
+--- a/core/java/android/view/IWindowManager.aidl
++++ b/core/java/android/view/IWindowManager.aidl
+@@ -1107,6 +1107,13 @@ interface IWindowManager
+      */
+     boolean isLetterboxBackgroundMultiColored();
+ 
++    /**
++     * Graphite: while SystemUI's screen recorder runs, layers of these apps don't get the secure
++     * bit, so the recording includes them. Other FLAG_SECURE windows stay black. Null packages
++     * ends it, as does the death of the token's process. Only SystemUI may call this.
++     */
++    void setRecordingSecureOverride(IBinder token, in String[] packages, int userId);
++
+     /**
+      * Captures the entire display specified by the displayId using the args provided. If the args
+      * are null or if the sourceCrop is invalid or null, the entire display bounds will be captured.
+diff --git a/packages/SystemUI/src/com/android/systemui/screenrecord/GraphiteRecorderOverride.kt b/packages/SystemUI/src/com/android/systemui/screenrecord/GraphiteRecorderOverride.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..d32dabaa76cdebd98e0fdadb6d64502c53ac282d
+--- /dev/null
++++ b/packages/SystemUI/src/com/android/systemui/screenrecord/GraphiteRecorderOverride.kt
+@@ -0,0 +1,63 @@
++/*
++ * Copyright (C) 2026 Graphite
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.systemui.screenrecord
++
++import android.content.Context
++import android.os.IBinder
++import android.os.RemoteException
++import android.provider.Settings
++import android.util.Log
++import android.view.WindowManagerGlobal
++import com.android.systemui.screenshot.GraphiteSecureOverride
++
++/**
++ * Graphite: lets SystemUI's screen recorder include the apps on the screenshot override list.
++ * WindowManager clears the secure bit of those apps' windows only, for as long as the recording
++ * runs. A change to the list applies from the next recording.
++ */
++object GraphiteRecorderOverride {
++    private const val TAG = "GraphiteRecorderOverride"
++
++    @JvmStatic
++    fun begin(context: Context, token: IBinder) {
++        val packages =
++            Settings.Secure.getStringForUser(
++                    context.contentResolver,
++                    GraphiteSecureOverride.PACKAGES,
++                    context.userId,
++                )
++                ?.split(',')
++                ?.map { it.trim() }
++                ?.filter { it.isNotEmpty() }
++                .orEmpty()
++        if (packages.isEmpty()) return
++        call { it.setRecordingSecureOverride(token, packages.toTypedArray(), context.userId) }
++    }
++
++    @JvmStatic
++    fun end(token: IBinder) {
++        call { it.setRecordingSecureOverride(token, null, 0) }
++    }
++
++    private fun call(block: (android.view.IWindowManager) -> Unit) {
++        try {
++            WindowManagerGlobal.getWindowManagerService()?.let(block)
++        } catch (e: RemoteException) {
++            Log.w(TAG, "WindowManager is unavailable", e)
++        }
++    }
++}
+diff --git a/packages/SystemUI/src/com/android/systemui/screenrecord/ScreenMediaRecorder.java b/packages/SystemUI/src/com/android/systemui/screenrecord/ScreenMediaRecorder.java
+index 1aad015c0c08a2487763565128df5927ec7a8da1..793d7aeb6611c1b0d15db94e5f52dd543ee0066a 100644
+--- a/packages/SystemUI/src/com/android/systemui/screenrecord/ScreenMediaRecorder.java
++++ b/packages/SystemUI/src/com/android/systemui/screenrecord/ScreenMediaRecorder.java
+@@ -44,6 +44,7 @@ import android.media.projection.MediaProjection;
+ import android.media.projection.MediaProjectionManager;
+ import android.media.projection.StopReason;
+ import android.net.Uri;
++import android.os.Binder;
+ import android.os.Handler;
+ import android.os.IBinder;
+ import android.os.RemoteException;
+@@ -89,6 +90,8 @@ public class ScreenMediaRecorder {
+     private File mTempVideoFile;
+     private File mTempAudioFile;
+     private MediaProjection mMediaProjection;
++    // Graphite: identifies this recording to WindowManager
++    private final IBinder mSecureOverrideToken = new Binder();
+     private Surface mInputSurface;
+     private VirtualDisplay mVirtualDisplay;
+     private MediaRecorder mMediaRecorder;
+@@ -142,6 +145,14 @@ public class ScreenMediaRecorder {
+                 mListener, mContext.getUserId());
+         mMediaProjection = new MediaProjection(mContext, projection);
+         mMediaProjection.registerCallback(mediaProjectionCallback, mHandler);
++        // Graphite: a projection can also be stopped from outside, without going through end()
++        mMediaProjection.registerCallback(new MediaProjection.Callback() {
++            @Override
++            public void onStop() {
++                GraphiteRecorderOverride.end(mSecureOverrideToken);
++            }
++        }, mHandler);
++        GraphiteRecorderOverride.begin(mContext, mSecureOverrideToken);
+ 
+         File cacheDir = mContext.getCacheDir();
+         cacheDir.mkdirs();
+@@ -301,7 +312,12 @@ public class ScreenMediaRecorder {
+      */
+     public void start() throws IOException, RemoteException, RuntimeException {
+         Log.d(TAG, "start recording");
+-        prepare();
++        try {
++            prepare();
++        } catch (IOException | RemoteException | RuntimeException e) {
++            GraphiteRecorderOverride.end(mSecureOverrideToken);
++            throw e;
++        }
+         mMediaRecorder.start();
+         mStartTimeMillis = System.currentTimeMillis();
+         mListener.onStarted();
+@@ -313,6 +329,7 @@ public class ScreenMediaRecorder {
+      * End screen recording, throws an exception if stopping recording failed
+      */
+     public void end(@StopReason int stopReason) throws IOException {
++        GraphiteRecorderOverride.end(mSecureOverrideToken);
+         if (mIsStarted.compareAndSet(true, false)) {
+             Closer closer = new Closer();
+ 
+diff --git a/services/core/java/com/android/server/wm/RootWindowContainer.java b/services/core/java/com/android/server/wm/RootWindowContainer.java
+index d4d14a9ae37123821801dfc17e51159eb1611f34..881fbfcbda20182b097cd2a34dafb71093c2a6db 100644
+--- a/services/core/java/com/android/server/wm/RootWindowContainer.java
++++ b/services/core/java/com/android/server/wm/RootWindowContainer.java
+@@ -612,7 +612,7 @@ class RootWindowContainer extends WindowContainer<DisplayContent>
+ 
+     void refreshSecureSurfaceState() {
+         forAllWindows(w -> {
+-            w.setSecureLocked(w.isSecureLocked());
++            w.setSecureLocked(w.isSurfaceSecureLocked());
+         }, true /* traverseTopToBottom */);
+         forAllTasks(t -> {
+             t.setSecure(t.isSecure());
+diff --git a/services/core/java/com/android/server/wm/WindowManagerService.java b/services/core/java/com/android/server/wm/WindowManagerService.java
+index dbc1e6b5800b2ce2ec717d5bf0000ae88e804fc9..78ca95c730ca758090f01be806e84ff6cd493d10 100644
+--- a/services/core/java/com/android/server/wm/WindowManagerService.java
++++ b/services/core/java/com/android/server/wm/WindowManagerService.java
+@@ -1284,6 +1284,11 @@ public class WindowManagerService extends IWindowManager.Stub
+     private final ScreenRecordingCallbackController mScreenRecordingCallbackController;
+ 
+     private volatile boolean mDisableSecureWindows = false;
++    // Graphite: apps SystemUI's running screen recorder may capture. Guarded by mGlobalLock.
++    private IBinder mRecordingSecureOverrideToken;
++    private IBinder.DeathRecipient mRecordingSecureOverrideDeath;
++    private ArraySet<String> mRecordingSecureOverridePackages;
++    private int mRecordingSecureOverrideUser;
+ 
+     /** Creates an instance of the WindowManagerService for the system server. */
+     public static WindowManagerService main(@NonNull final Context context,
+@@ -2749,7 +2754,7 @@ public class WindowManagerService extends IWindowManager.Stub
+                     && win.hasWallpaper();
+             wallpaperMayMove |= (flagChanges & FLAG_SHOW_WALLPAPER) != 0;
+             if ((flagChanges & FLAG_SECURE) != 0) {
+-                win.setSecureLocked(win.isSecureLocked());
++                win.setSecureLocked(win.isSurfaceSecureLocked());
+             }
+ 
+             final boolean wasVisible = win.isVisible();
+@@ -11486,6 +11491,71 @@ public class WindowManagerService extends IWindowManager.Stub
+         }
+     }
+ 
++    /** Graphite: see {@link IWindowManager#setRecordingSecureOverride}. */
++    @Override
++    public void setRecordingSecureOverride(IBinder token, String[] packages, int userId) {
++        if (!checkCallingPermission(android.Manifest.permission.STATUS_BAR_SERVICE,
++                "setRecordingSecureOverride()")) {
++            throw new SecurityException("Requires STATUS_BAR_SERVICE permission");
++        }
++        final long origId = Binder.clearCallingIdentity();
++        try {
++            synchronized (mGlobalLock) {
++                if (packages == null) {
++                    // A finished recording mustn't end a newer one's override
++                    if (token == mRecordingSecureOverrideToken) {
++                        clearRecordingSecureOverrideLocked();
++                    }
++                    return;
++                }
++                clearRecordingSecureOverrideLocked();
++                final ArraySet<String> allowed = new ArraySet<>(packages);
++                // SystemUI owns the bouncer and the lock screen, which stay protected
++                allowed.remove("android");
++                allowed.remove("com.android.systemui");
++                if (allowed.isEmpty()) {
++                    return;
++                }
++                final IBinder.DeathRecipient death = () -> {
++                    synchronized (mGlobalLock) {
++                        if (token == mRecordingSecureOverrideToken) {
++                            clearRecordingSecureOverrideLocked();
++                        }
++                    }
++                };
++                try {
++                    token.linkToDeath(death, 0);
++                } catch (RemoteException e) {
++                    return;
++                }
++                mRecordingSecureOverrideToken = token;
++                mRecordingSecureOverrideDeath = death;
++                mRecordingSecureOverridePackages = allowed;
++                mRecordingSecureOverrideUser = userId;
++                mRoot.refreshSecureSurfaceState();
++            }
++        } finally {
++            Binder.restoreCallingIdentity(origId);
++        }
++    }
++
++    private void clearRecordingSecureOverrideLocked() {
++        if (mRecordingSecureOverrideToken == null) {
++            return;
++        }
++        mRecordingSecureOverrideToken.unlinkToDeath(mRecordingSecureOverrideDeath, 0);
++        mRecordingSecureOverrideToken = null;
++        mRecordingSecureOverrideDeath = null;
++        mRecordingSecureOverridePackages = null;
++        mRoot.refreshSecureSurfaceState();
++    }
++
++    boolean isRecordingSecureOverrideLocked(String packageName, int userId) {
++        return mRecordingSecureOverridePackages != null
++                && userId == mRecordingSecureOverrideUser
++                && mRecordingSecureOverridePackages.contains(packageName);
++    }
++
+     boolean getDisableSecureWindows() {
+         return mDisableSecureWindows;
+     }
+diff --git a/services/core/java/com/android/server/wm/WindowState.java b/services/core/java/com/android/server/wm/WindowState.java
+index dc2f6c9741e4128f82fd5fe287c069132ad548e6..5e17b1a85aefdaa796ae0ab0b7a4711892add5f9 100644
+--- a/services/core/java/com/android/server/wm/WindowState.java
++++ b/services/core/java/com/android/server/wm/WindowState.java
+@@ -1197,7 +1197,7 @@ class WindowState extends WindowContainer<WindowState> implements WindowManagerP
+     void setInitialSurfaceControlProperties(SurfaceControl.Builder b) {
+         super.setInitialSurfaceControlProperties(b);
+         getPendingTransaction().setTrustedOverlay(mSurfaceControl, isWindowTrustedOverlay());
+-        getPendingTransaction().setSecure(mSurfaceControl, isSecureLocked());
++        getPendingTransaction().setSecure(mSurfaceControl, isSurfaceSecureLocked());
+         // All apps should be considered as occluding when computing TrustedPresentation Thresholds.
+         getPendingTransaction().setCanOccludePresentation(mSurfaceControl,
+                 canOccludePresentation());
+@@ -6389,6 +6389,18 @@ class WindowState extends WindowContainer<WindowState> implements WindowManagerP
+         return mActivityRecord != null;
+     }
+ 
++    /**
++     * Graphite: the secure bit of this window's layer. It only differs from isSecureLocked() while
++     * SystemUI's screen recorder runs and this app is on the user's override list, so thumbnails
++     * and every other isSecureLocked() check keep treating the window as protected.
++     */
++    boolean isSurfaceSecureLocked() {
++        if (mWmService.isRecordingSecureOverrideLocked(getOwningPackage(), mShowUserId)) {
++            return !DevicePolicyCache.getInstance().isScreenCaptureAllowed(mShowUserId);
++        }
++        return isSecureLocked();
++    }
++
+     void setSecureLocked(boolean isSecure) {
+         ProtoLog.i(WM_SHOW_TRANSACTIONS, "SURFACE isSecure=%b: %s", isSecure, getName());
+         if (mSurfaceControl == null) {

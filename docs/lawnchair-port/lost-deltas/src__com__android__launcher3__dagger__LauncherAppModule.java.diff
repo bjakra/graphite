@@ -1,0 +1,26 @@
+diff --git a/src/com/android/launcher3/dagger/LauncherAppModule.java b/src/com/android/launcher3/dagger/LauncherAppModule.java
+index 54e532758b..83dd5b599b 100644
+--- a/src/com/android/launcher3/dagger/LauncherAppModule.java
++++ b/src/com/android/launcher3/dagger/LauncherAppModule.java
+@@ -20,7 +20,9 @@ import com.android.launcher3.compose.widgetpicker.LauncherWidgetPickerModule;
+ import com.android.launcher3.concurrent.ExecutorsModule;
+ import com.android.launcher3.util.dagger.LauncherExecutorsModule;
+ 
++import android.content.Context;
+ import dagger.Module;
++import dagger.Provides;
+ 
+ @Module(
+         includes = {
+@@ -37,4 +39,10 @@ import dagger.Module;
+             LauncherWidgetPickerModule.class
+         },
+         subcomponents = ActivityContextComponent.class)
+-public class LauncherAppModule { }
++public class LauncherAppModule {
++    @Provides
++    @LauncherAppSingleton
++    public Context provideContext(@ApplicationContext Context context) {
++        return context;
++    }
++}

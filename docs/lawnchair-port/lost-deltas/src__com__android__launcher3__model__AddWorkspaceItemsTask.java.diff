@@ -1,0 +1,32 @@
+diff --git a/src/com/android/launcher3/model/AddWorkspaceItemsTask.java b/src/com/android/launcher3/model/AddWorkspaceItemsTask.java
+index 01c4255569..b1e886b299 100644
+--- a/src/com/android/launcher3/model/AddWorkspaceItemsTask.java
++++ b/src/com/android/launcher3/model/AddWorkspaceItemsTask.java
+@@ -85,7 +85,7 @@ public class AddWorkspaceItemsTask implements ModelUpdateTask {
+         final Context context = taskController.getContext();
+ 
+         synchronized (dataModel) {
+-            IntArray workspaceScreens = dataModel.itemsIdMap.collectWorkspaceScreens();
++            IntArray workspaceScreens = dataModel.itemsIdMap.collectWorkspaceScreens(context);
+ 
+             List<ItemInfo> filteredItems = new ArrayList<>();
+             for (Pair<ItemInfo, Object> entry : mItemList) {
+@@ -126,7 +126,7 @@ public class AddWorkspaceItemsTask implements ModelUpdateTask {
+             for (ItemInfo item : filteredItems) {
+                 // Find appropriate space for the item.
+                 int[] coords = mItemSpaceFinder.findSpaceForItem(workspaceScreens,
+-                        addedWorkspaceScreensFinal, addedItemsFinal, item.spanX, item.spanY);
++                        addedWorkspaceScreensFinal, addedItemsFinal, item.spanX, item.spanY, context);
+                 int screenId = coords[0];
+ 
+                 ItemInfo itemInfo;
+@@ -142,7 +142,8 @@ public class AddWorkspaceItemsTask implements ModelUpdateTask {
+                 if (item instanceof WorkspaceItemInfo && ((WorkspaceItemInfo) item).isPromise()) {
+                     WorkspaceItemInfo workspaceInfo = (WorkspaceItemInfo) item;
+                     String packageName = item.getTargetComponent() != null
+-                            ? item.getTargetComponent().getPackageName() : null;
++                            ? item.getTargetComponent().getPackageName()
++                            : null;
+                     if (packageName == null) {
+                         continue;
+                     }

@@ -1,0 +1,13 @@
+diff --git a/src/com/android/launcher3/widget/picker/WidgetRecommendationsView.java b/src/com/android/launcher3/widget/picker/WidgetRecommendationsView.java
+index 12ea5064a9..e73caadc8b 100644
+--- a/src/com/android/launcher3/widget/picker/WidgetRecommendationsView.java
++++ b/src/com/android/launcher3/widget/picker/WidgetRecommendationsView.java
+@@ -19,6 +19,8 @@ package com.android.launcher3.widget.picker;
+ import static com.android.launcher3.widget.picker.WidgetRecommendationCategory.DEFAULT_WIDGET_RECOMMENDATION_CATEGORY;
+ import static com.android.launcher3.widget.util.WidgetsTableUtils.groupWidgetItemsUsingRowPxWithReordering;
+ 
++import static java.util.stream.Collectors.toList;
++
+ import android.content.ComponentName;
+ import android.content.Context;
+ import android.os.Bundle;

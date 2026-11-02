@@ -1,0 +1,321 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 17:20:41 +0100
+Subject: [PATCH] SystemUI: clock AM/PM and position, network speed
+
+Adds the graphite_clock_am_pm and graphite_clock_right secure settings to the status bar clock and
+a NetworkTrafficView enabled by graphite_network_traffic. Off by default. There is no centred clock
+because the Pixel 8 Pro's camera cutout is in the middle of the status bar.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---
+ packages/SystemUI/res/layout/status_bar.xml   |  12 ++
+ .../systemui/statusbar/policy/Clock.java      |  44 +++++-
+ .../statusbar/policy/NetworkTrafficView.java  | 126 ++++++++++++++++++
+ 3 files changed, 179 insertions(+), 3 deletions(-)
+ create mode 100644 packages/SystemUI/src/com/android/systemui/statusbar/policy/NetworkTrafficView.java
+
+diff --git a/packages/SystemUI/res/layout/status_bar.xml b/packages/SystemUI/res/layout/status_bar.xml
+index e0912a89622ce034b2440ed72fcf064b583b3cdc..6c1aa708f72573af50d7a7a39054b93d18ad8fe8 100644
+--- a/packages/SystemUI/res/layout/status_bar.xml
++++ b/packages/SystemUI/res/layout/status_bar.xml
+@@ -157,6 +157,18 @@
+                     android:layout_marginEnd="@dimen/status_bar_user_chip_end_margin"
+                     layout="@layout/status_bar_user_chip_container" />
+ 
++                <!-- Graphite: network speed, off unless enabled in Graphite settings -->
++                <com.android.systemui.statusbar.policy.NetworkTrafficView
++                    android:id="@+id/graphite_network_traffic"
++                    android:layout_width="wrap_content"
++                    android:layout_height="match_parent"
++                    android:gravity="center_vertical"
++                    android:paddingEnd="4dp"
++                    android:singleLine="true"
++                    android:textAppearance="@style/TextAppearance.StatusBar.Default"
++                    android:textSize="11sp"
++                    android:visibility="gone" />
++
+                 <include layout="@layout/system_icons"
+                      android:layout_gravity="center_vertical"
+                      android:layout_width="wrap_content"
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/policy/Clock.java b/packages/SystemUI/src/com/android/systemui/statusbar/policy/Clock.java
+index 5395d08eef8798889050148ae72932b10a164a16..147abb7762f83557ca2964b1d447d9d12ec65696 100644
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/policy/Clock.java
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/policy/Clock.java
+@@ -72,6 +72,9 @@ public class Clock extends TextView implements
+         DarkReceiver {
+ 
+     public static final String CLOCK_SECONDS = "clock_seconds";
++    // Graphite: show AM/PM in 12-hour time, and which side of the status bar the clock is on
++    private static final String GRAPHITE_CLOCK_AM_PM = "graphite_clock_am_pm";
++    private static final String GRAPHITE_CLOCK_RIGHT = "graphite_clock_right";
+     private static final String CLOCK_SUPER_PARCELABLE = "clock_super_parcelable";
+     private static final String CURRENT_USER_ID = "current_user_id";
+     private static final String SHOW_SECONDS = "show_seconds";
+@@ -93,7 +96,8 @@ public class Clock extends TextView implements
+     private static final int AM_PM_STYLE_SMALL   = 1;
+     private static final int AM_PM_STYLE_GONE    = 2;
+ 
+-    private final int mAmPmStyle;
++    private int mAmPmStyle;
++    private final int mDefaultAmPmStyle;
+     private boolean mShowSeconds;
+     private Handler mSecondsHandler;
+ 
+@@ -129,7 +133,8 @@ public class Clock extends TextView implements
+                 R.styleable.Clock,
+                 0, 0);
+         try {
+-            mAmPmStyle = a.getInt(R.styleable.Clock_amPmStyle, AM_PM_STYLE_GONE);
++            mDefaultAmPmStyle = a.getInt(R.styleable.Clock_amPmStyle, AM_PM_STYLE_GONE);
++            mAmPmStyle = mDefaultAmPmStyle;
+             mNonAdaptedColor = getCurrentTextColor();
+         } finally {
+             a.recycle();
+@@ -190,7 +195,8 @@ public class Clock extends TextView implements
+             mBroadcastDispatcher.registerReceiverWithHandler(mIntentReceiver, filter,
+                     Dependency.get(Dependency.TIME_TICK_HANDLER), UserHandle.ALL);
+             Dependency.get(TunerService.class).addTunable(this, CLOCK_SECONDS,
+-                    StatusBarIconController.ICON_HIDE_LIST);
++                    StatusBarIconController.ICON_HIDE_LIST, GRAPHITE_CLOCK_AM_PM,
++                    GRAPHITE_CLOCK_RIGHT);
+             mUserTracker.addCallback(mUserChangedCallback, mContext.getMainExecutor());
+             mCurrentUserId = mUserTracker.getUserId();
+         }
+@@ -278,6 +284,38 @@ public class Clock extends TextView implements
+         if (CLOCK_SECONDS.equals(key)) {
+             mShowSeconds = TunerService.parseIntegerSwitch(newValue, false);
+             updateShowSeconds();
++        } else if (GRAPHITE_CLOCK_AM_PM.equals(key)) {
++            mAmPmStyle = TunerService.parseIntegerSwitch(newValue, false)
++                    ? AM_PM_STYLE_NORMAL : mDefaultAmPmStyle;
++            // Rebuilds the cached format on the next update
++            mContentDescriptionFormatString = "";
++            // addTunable() calls this before onAttachedToWindow() has set up the calendar
++            if (mCalendar != null) {
++                updateClock();
++            }
++        } else if (GRAPHITE_CLOCK_RIGHT.equals(key)) {
++            boolean right = TunerService.parseIntegerSwitch(newValue, false);
++            // Moving the view re-attaches it, which would call this again mid-registration
++            post(() -> moveToSide(right));
++        }
++    }
++
++    /** Graphite: moves the home status bar's clock. The shade and keyguard clocks stay put. */
++    private void moveToSide(boolean right) {
++        android.view.View root = getRootView();
++        android.view.ViewGroup start = root.findViewById(R.id.status_bar_start_side_except_heads_up);
++        android.view.ViewGroup end = root.findViewById(R.id.status_bar_end_side_content);
++        android.view.ViewGroup target = right ? end : start;
++        if (start == null || end == null || getParent() == target
++                || (getParent() != start && getParent() != end)) {
++            return;
++        }
++        ((android.view.ViewGroup) getParent()).removeView(this);
++        if (right) {
++            end.addView(this);
++        } else {
++            start.addView(this, start.indexOfChild(
++                    start.findViewById(R.id.start_side_notif_and_chip_container)));
+         }
+     }
+ 
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/policy/NetworkTrafficView.java b/packages/SystemUI/src/com/android/systemui/statusbar/policy/NetworkTrafficView.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..b32cbaf0467866c81b71589f91a30099b12987ef
+--- /dev/null
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/policy/NetworkTrafficView.java
+@@ -0,0 +1,126 @@
++/*
++ * Copyright (C) 2026 The Graphite Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.systemui.statusbar.policy;
++
++import android.content.Context;
++import android.graphics.Rect;
++import android.net.TrafficStats;
++import android.os.SystemClock;
++import android.util.AttributeSet;
++import android.view.View;
++import android.widget.TextView;
++
++import com.android.systemui.Dependency;
++import com.android.systemui.plugins.DarkIconDispatcher;
++import com.android.systemui.tuner.TunerService;
++
++import java.util.ArrayList;
++import java.util.Locale;
++
++/**
++ * Graphite: status bar network speed (download + upload), enabled by the graphite_network_traffic
++ * secure setting. Polls only while enabled and visible, and stays hidden below 1 KB/s.
++ */
++public class NetworkTrafficView extends TextView
++        implements TunerService.Tunable, DarkIconDispatcher.DarkReceiver {
++    public static final String SETTING = "graphite_network_traffic";
++    private static final long POLL_INTERVAL_MS = 2000;
++    private static final long MIN_BYTES_PER_SECOND = 1024;
++
++    private boolean mEnabled;
++    private long mLastBytes;
++    private long mLastTime;
++
++    private final Runnable mPoll = this::poll;
++
++    public NetworkTrafficView(Context context, AttributeSet attrs) {
++        super(context, attrs);
++    }
++
++    @Override
++    protected void onAttachedToWindow() {
++        super.onAttachedToWindow();
++        Dependency.get(TunerService.class).addTunable(this, SETTING);
++        Dependency.get(DarkIconDispatcher.class).addDarkReceiver(this);
++    }
++
++    @Override
++    protected void onDetachedFromWindow() {
++        super.onDetachedFromWindow();
++        Dependency.get(TunerService.class).removeTunable(this);
++        Dependency.get(DarkIconDispatcher.class).removeDarkReceiver(this);
++        removeCallbacks(mPoll);
++    }
++
++    @Override
++    public void onTuningChanged(String key, String newValue) {
++        mEnabled = TunerService.parseIntegerSwitch(newValue, false);
++        restart();
++    }
++
++    @Override
++    public void onDarkChanged(ArrayList<Rect> areas, float darkIntensity, int tint) {
++        setTextColor(DarkIconDispatcher.getTint(areas, this, tint));
++    }
++
++    @Override
++    protected void onWindowVisibilityChanged(int visibility) {
++        super.onWindowVisibilityChanged(visibility);
++        restart();
++    }
++
++    private void restart() {
++        removeCallbacks(mPoll);
++        if (!mEnabled) {
++            setVisibility(View.GONE);
++            return;
++        }
++        if (getWindowVisibility() != View.VISIBLE) {
++            return;
++        }
++        mLastBytes = totalBytes();
++        mLastTime = SystemClock.elapsedRealtime();
++        postDelayed(mPoll, POLL_INTERVAL_MS);
++    }
++
++    private void poll() {
++        long bytes = totalBytes();
++        long now = SystemClock.elapsedRealtime();
++        long elapsed = Math.max(1, now - mLastTime);
++        long speed = Math.max(0, bytes - mLastBytes) * 1000 / elapsed;
++        mLastBytes = bytes;
++        mLastTime = now;
++        if (speed < MIN_BYTES_PER_SECOND) {
++            setVisibility(View.GONE);
++        } else {
++            setText(format(speed));
++            setVisibility(View.VISIBLE);
++        }
++        postDelayed(mPoll, POLL_INTERVAL_MS);
++    }
++
++    private static long totalBytes() {
++        return TrafficStats.getTotalRxBytes() + TrafficStats.getTotalTxBytes();
++    }
++
++    private static String format(long bytesPerSecond) {
++        if (bytesPerSecond >= 1024 * 1024) {
++            return String.format(Locale.getDefault(), "%.1f MB/s", bytesPerSecond / 1048576f);
++        }
++        return String.format(Locale.getDefault(), "%d KB/s", bytesPerSecond / 1024);
++    }
++}
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 18:37:14 +0100
+Subject: [PATCH] SystemUI: remove the right-side clock option
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../systemui/statusbar/policy/Clock.java      | 29 ++-----------------
+ 1 file changed, 2 insertions(+), 27 deletions(-)
+
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/policy/Clock.java b/packages/SystemUI/src/com/android/systemui/statusbar/policy/Clock.java
+index 147abb7762f83557ca2964b1d447d9d12ec65696..89196730d8201168b0f4e7c51cf48266d667d8d0 100644
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/policy/Clock.java
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/policy/Clock.java
+@@ -72,9 +72,8 @@ public class Clock extends TextView implements
+         DarkReceiver {
+ 
+     public static final String CLOCK_SECONDS = "clock_seconds";
+-    // Graphite: show AM/PM in 12-hour time, and which side of the status bar the clock is on
++    // Graphite: show AM/PM in 12-hour time
+     private static final String GRAPHITE_CLOCK_AM_PM = "graphite_clock_am_pm";
+-    private static final String GRAPHITE_CLOCK_RIGHT = "graphite_clock_right";
+     private static final String CLOCK_SUPER_PARCELABLE = "clock_super_parcelable";
+     private static final String CURRENT_USER_ID = "current_user_id";
+     private static final String SHOW_SECONDS = "show_seconds";
+@@ -195,8 +194,7 @@ public class Clock extends TextView implements
+             mBroadcastDispatcher.registerReceiverWithHandler(mIntentReceiver, filter,
+                     Dependency.get(Dependency.TIME_TICK_HANDLER), UserHandle.ALL);
+             Dependency.get(TunerService.class).addTunable(this, CLOCK_SECONDS,
+-                    StatusBarIconController.ICON_HIDE_LIST, GRAPHITE_CLOCK_AM_PM,
+-                    GRAPHITE_CLOCK_RIGHT);
++                    StatusBarIconController.ICON_HIDE_LIST, GRAPHITE_CLOCK_AM_PM);
+             mUserTracker.addCallback(mUserChangedCallback, mContext.getMainExecutor());
+             mCurrentUserId = mUserTracker.getUserId();
+         }
+@@ -293,29 +291,6 @@ public class Clock extends TextView implements
+             if (mCalendar != null) {
+                 updateClock();
+             }
+-        } else if (GRAPHITE_CLOCK_RIGHT.equals(key)) {
+-            boolean right = TunerService.parseIntegerSwitch(newValue, false);
+-            // Moving the view re-attaches it, which would call this again mid-registration
+-            post(() -> moveToSide(right));
+-        }
+-    }
+-
+-    /** Graphite: moves the home status bar's clock. The shade and keyguard clocks stay put. */
+-    private void moveToSide(boolean right) {
+-        android.view.View root = getRootView();
+-        android.view.ViewGroup start = root.findViewById(R.id.status_bar_start_side_except_heads_up);
+-        android.view.ViewGroup end = root.findViewById(R.id.status_bar_end_side_content);
+-        android.view.ViewGroup target = right ? end : start;
+-        if (start == null || end == null || getParent() == target
+-                || (getParent() != start && getParent() != end)) {
+-            return;
+-        }
+-        ((android.view.ViewGroup) getParent()).removeView(this);
+-        if (right) {
+-            end.addView(this);
+-        } else {
+-            start.addView(this, start.indexOfChild(
+-                    start.findViewById(R.id.start_side_notif_and_chip_container)));
+         }
+     }
+ 

@@ -1,0 +1,20 @@
+diff --git a/src/com/android/launcher3/model/UserManagerState.java b/src/com/android/launcher3/model/UserManagerState.java
+index ed3243043b..eab754c594 100644
+--- a/src/com/android/launcher3/model/UserManagerState.java
++++ b/src/com/android/launcher3/model/UserManagerState.java
+@@ -69,6 +69,15 @@ public class UserManagerState {
+         return mQuietUsersHashCodeMap.get(user.hashCode());
+     }
+ 
++    /**
++     * Updates the quiet mode state for a specific user
++     */
++    public void updateUserQuietMode(UserCache userCache, UserHandle user, boolean isQuiet) {
++        long serialNo = userCache.getSerialNumberForUser(user);
++        mQuietUsersHashCodeMap.put(user.hashCode(), isQuiet);
++        mQuietUsersSerialNoMap.put(serialNo, isQuiet);
++    }
++
+     /**
+      * Returns true if any user profile has quiet mode enabled.
+      * <p>

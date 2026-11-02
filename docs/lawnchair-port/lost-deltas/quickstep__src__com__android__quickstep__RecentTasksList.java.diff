@@ -1,0 +1,174 @@
+diff --git a/quickstep/src/com/android/quickstep/RecentTasksList.java b/quickstep/src/com/android/quickstep/RecentTasksList.java
+index c02ca8199c..926c157f58 100644
+--- a/quickstep/src/com/android/quickstep/RecentTasksList.java
++++ b/quickstep/src/com/android/quickstep/RecentTasksList.java
+@@ -27,6 +27,7 @@ import android.app.KeyguardManager;
+ import android.app.TaskInfo;
+ import android.content.ComponentName;
+ import android.content.Context;
++import android.content.pm.ParceledListSlice;
+ import android.os.Process;
+ import android.os.RemoteException;
+ import android.util.SparseBooleanArray;
+@@ -37,6 +38,7 @@ import androidx.annotation.VisibleForTesting;
+ 
+ import com.android.launcher3.statehandlers.DesktopVisibilityController;
+ import com.android.launcher3.util.DaggerSingletonTracker;
++import com.android.launcher3.Utilities;
+ import com.android.launcher3.util.LooperExecutor;
+ import com.android.quickstep.util.DesktopTask;
+ import com.android.quickstep.util.ExternalDisplaysKt;
+@@ -44,6 +46,8 @@ import com.android.quickstep.util.GroupTask;
+ import com.android.quickstep.util.SingleTask;
+ import com.android.quickstep.util.SplitTask;
+ import com.android.systemui.shared.recents.model.Task;
++import com.android.systemui.shared.system.TaskStackChangeListener;
++import com.android.systemui.shared.system.TaskStackChangeListeners;
+ import com.android.wm.shell.Flags;
+ import com.android.wm.shell.recents.IRecentTasksListener;
+ import com.android.wm.shell.shared.GroupedTaskInfo;
+@@ -66,6 +70,9 @@ import java.util.function.Consumer;
+ import java.util.function.Predicate;
+ import java.util.stream.Collectors;
+ 
++import app.lawnchair.LawnchairApp;
++import app.lawnchair.compat.LawnchairQuickstepCompat;
++
+ /**
+  * Manages the recent task list from the system, caching it as necessary.
+  */
+@@ -101,57 +108,90 @@ public class RecentTasksList {
+         mKeyguardManager = keyguardManager;
+         mChangeId = 1;
+         mSysUiProxy = sysUiProxy;
+-        final IRecentTasksListener recentTasksListener = new IRecentTasksListener.Stub() {
+-            @Override
+-            public void onRecentTasksChanged() throws RemoteException {
+-                mMainThreadExecutor.execute(RecentTasksList.this::onRecentTasksChanged);
+-            }
++        if (LawnchairApp.isRecentsEnabled()) {
++            if (LawnchairQuickstepCompat.ATLEAST_U) {
++                final IRecentTasksListener recentTasksListener = new IRecentTasksListener.Stub() {
++                    @Override
++                    public void onRecentTasksChanged() throws RemoteException {
++                        mMainThreadExecutor.execute(RecentTasksList.this::onRecentTasksChanged);
++                    }
+ 
+-            @Override
+-            public void onRunningTaskAppeared(RunningTaskInfo taskInfo) {
+-                mMainThreadExecutor.execute(() -> {
+-                    RecentTasksList.this.onRunningTaskAppeared(taskInfo);
+-                });
+-            }
++                    @Override
++                    public void onRunningTaskAppeared(RunningTaskInfo taskInfo) {
++                        mMainThreadExecutor.execute(() -> {
++                            RecentTasksList.this.onRunningTaskAppeared(taskInfo);
++                        });
++                    }
+ 
+-            @Override
+-            public void onRunningTaskVanished(RunningTaskInfo taskInfo) {
+-                mMainThreadExecutor.execute(() -> {
+-                    RecentTasksList.this.onRunningTaskVanished(taskInfo);
+-                });
+-            }
++                    @Override
++                    public void onRunningTaskVanished(RunningTaskInfo taskInfo) {
++                        mMainThreadExecutor.execute(() -> {
++                            RecentTasksList.this.onRunningTaskVanished(taskInfo);
++                        });
++                    }
+ 
+-            @Override
+-            public void onRunningTaskChanged(RunningTaskInfo taskInfo) {
+-                mMainThreadExecutor.execute(() -> {
+-                    RecentTasksList.this.onRunningTaskChanged(taskInfo);
+-                });
+-            }
++                    @Override
++                    public void onRunningTaskChanged(RunningTaskInfo taskInfo) {
++                        mMainThreadExecutor.execute(() -> {
++                            RecentTasksList.this.onRunningTaskChanged(taskInfo);
++                        });
++                    }
+ 
+-            @Override
+-            public void onTaskMovedToFront(GroupedTaskInfo taskToFront) {
+-                mMainThreadExecutor.execute(() -> {
+-                    topTaskTracker.handleTaskMovedToFront(
+-                            taskToFront.getBaseGroupedTask().getTaskInfo1());
+-                });
+-            }
++                    @Override
++                    public void onTaskMovedToFront(GroupedTaskInfo taskToFront) {
++                        mMainThreadExecutor.execute(() -> {
++                            topTaskTracker.handleTaskMovedToFront(
++                                taskToFront.getBaseGroupedTask().getTaskInfo1());
++                        });
++                    }
+ 
+-            @Override
+-            public void onTaskInfoChanged(RunningTaskInfo taskInfo) {
+-                mMainThreadExecutor.execute(() -> topTaskTracker.onTaskChanged(taskInfo));
+-            }
++                    @Override
++                    public void onTaskInfoChanged(RunningTaskInfo taskInfo) {
++                        mMainThreadExecutor.execute(() -> topTaskTracker.onTaskChanged(taskInfo));
++                    }
+ 
+-            @Override
+-            public void onVisibleTasksChanged(GroupedTaskInfo[] visibleTasks) {
+-                mMainThreadExecutor.execute(() -> {
+-                    topTaskTracker.onVisibleTasksChanged(visibleTasks);
+-                });
+-            }
+-        };
++                    @Override
++                    public void onVisibleTasksChanged(GroupedTaskInfo[] visibleTasks) {
++                        mMainThreadExecutor.execute(() -> {
++                            topTaskTracker.onVisibleTasksChanged(visibleTasks);
++                        });
++                    }
++            };
++
++                mSysUiProxy.registerRecentTasksListener(recentTasksListener);
++                tracker.addCloseable(
++                    () -> mSysUiProxy.unregisterRecentTasksListener(recentTasksListener));
++            } else if (LawnchairQuickstepCompat.ATLEAST_Q) {
++                TaskStackChangeListeners.getInstance()
++                    .registerTaskStackListener(new TaskStackChangeListener() {
++                        @Override
++                        public void onTaskStackChanged() {
++                            onRecentTasksChanged();
++                        }
+ 
+-        mSysUiProxy.registerRecentTasksListener(recentTasksListener);
+-        tracker.addCloseable(
+-                () -> mSysUiProxy.unregisterRecentTasksListener(recentTasksListener));
++                        @Override
++                        public void onRecentTaskListUpdated() {
++                            onRecentTasksChanged();
++                        }
++
++                        @Override
++                        public void onTaskRemoved(int taskId) {
++                            onRecentTasksChanged();
++                        }
++
++                        @Override
++                        public void onActivityPinned(String packageName, int userId, int taskId,
++                            int stackId) {
++                            onRecentTasksChanged();
++                        }
++
++                        @Override
++                        public void onActivityUnpinned() {
++                            onRecentTasksChanged();
++                        }
++                    });
++            }
++        }
+ 
+         // We may receive onRunningTaskAppeared events later for tasks which have already been
+         // included in the list returned by mSysUiProxy.getRunningTasks(), or may receive

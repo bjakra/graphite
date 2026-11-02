@@ -1,0 +1,134 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 22:19:35 +0100
+Subject: [PATCH] SystemUI: show charging current, voltage, power and
+ temperature on the lock screen
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---
+ .../KeyguardIndicationController.java         | 53 +++++++++++++++++++
+ 1 file changed, 53 insertions(+)
+
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/KeyguardIndicationController.java b/packages/SystemUI/src/com/android/systemui/statusbar/KeyguardIndicationController.java
+index 49f076d331857d8e94c650f05a7459006442de84..fcbbc97243593fe84e7cbec41033a76f95d2a157 100644
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/KeyguardIndicationController.java
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/KeyguardIndicationController.java
+@@ -76,6 +76,7 @@ import android.os.Message;
+ import android.os.RemoteException;
+ import android.os.UserHandle;
+ import android.os.UserManager;
++import android.provider.Settings;
+ import android.text.TextUtils;
+ import android.text.format.Formatter;
+ import android.util.Pair;
+@@ -139,6 +140,7 @@ import dagger.Lazy;
+ import java.io.PrintWriter;
+ import java.text.NumberFormat;
+ import java.util.Set;
++import java.util.Locale;
+ import java.util.function.Consumer;
+ 
+ import javax.inject.Inject;
+@@ -661,12 +663,62 @@ public class KeyguardIndicationController {
+         });
+     }
+ 
++    // Graphite: charging info (Settings.Secure graphite_charging_info), refreshed while plugged in
++    private static final long CHARGING_INFO_REFRESH_MS = 2000;
++    private final Runnable mChargingInfoRefresh = () -> updateLockScreenBatteryMsg(false);
++
++    private boolean isChargingInfoEnabled() {
++        return Settings.Secure.getIntForUser(mContext.getContentResolver(),
++                "graphite_charging_info", 0, UserHandle.USER_CURRENT) == 1;
++    }
++
++    /** "1.25 A · 5.02 V · 6.3 W · 31.4 °C", or null when the battery can't be read. */
++    private String computeChargingInfo() {
++        Intent battery = mContext.registerReceiver(null,
++                new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
++        if (battery == null) {
++            return null;
++        }
++        StringBuilder sb = new StringBuilder();
++        int voltageMv = battery.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0);
++        int currentUa = mContext.getSystemService(BatteryManager.class)
++                .getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW);
++        if (currentUa != Integer.MIN_VALUE && currentUa != 0) {
++            double amps = Math.abs(currentUa) / 1_000_000.0;
++            sb.append(String.format(Locale.getDefault(), "%.2f A", amps));
++            if (voltageMv > 0) {
++                double volts = voltageMv / 1000.0;
++                sb.append(String.format(Locale.getDefault(), " · %.2f V · %.1f W",
++                        volts, amps * volts));
++            }
++        } else if (voltageMv > 0) {
++            sb.append(String.format(Locale.getDefault(), "%.2f V", voltageMv / 1000.0));
++        }
++        int tempDeciC = battery.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Integer.MIN_VALUE);
++        if (tempDeciC != Integer.MIN_VALUE) {
++            if (sb.length() > 0) {
++                sb.append(" · ");
++            }
++            sb.append(String.format(Locale.getDefault(), "%.1f °C", tempDeciC / 10.0));
++        }
++        return sb.length() > 0 ? sb.toString() : null;
++    }
++
+     private void updateLockScreenBatteryMsg(boolean animate) {
+         if (mPowerPluggedIn || mEnableBatteryDefender) {
+             String powerIndication = computePowerIndication();
+             if (DEBUG_CHARGING_SPEED) {
+                 powerIndication += ",  " + (mChargingWattage / 1000) + " mW";
+             }
++            // Graphite: live charging current, voltage, power and temperature
++            mHandler.removeCallbacks(mChargingInfoRefresh);
++            if (mPowerPluggedIn && isChargingInfoEnabled()) {
++                String chargingInfo = computeChargingInfo();
++                if (chargingInfo != null) {
++                    powerIndication += "  ·  " + chargingInfo;
++                }
++                mHandler.postDelayed(mChargingInfoRefresh, CHARGING_INFO_REFRESH_MS);
++            }
+ 
+             mKeyguardLogger.logUpdateBatteryIndication(powerIndication, mPowerPluggedIn);
+             mRotateTextViewController.updateIndication(
+@@ -678,6 +730,7 @@ public class KeyguardIndicationController {
+                     animate);
+         } else {
+             mKeyguardLogger.log(TAG, LogLevel.DEBUG, "hide battery indication");
++            mHandler.removeCallbacks(mChargingInfoRefresh);
+             // don't show the charging information if device isn't plugged in
+             mRotateTextViewController.hideIndication(INDICATION_TYPE_BATTERY);
+         }
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 17:20:41 +0100
+Subject: [PATCH] SystemUI: update the charging info in place
+
+The live refresh went through the indication switch animation, so the line vanished and came back
+every time the numbers changed.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../KeyguardIndicationRotateTextViewController.java        | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/packages/SystemUI/src/com/android/systemui/keyguard/KeyguardIndicationRotateTextViewController.java b/packages/SystemUI/src/com/android/systemui/keyguard/KeyguardIndicationRotateTextViewController.java
+index edfe040a7a6afdadbae422a6191e8e4d67072753..90d973fa2890472688ba7ebb2359d43c3f867abb 100644
+--- a/packages/SystemUI/src/com/android/systemui/keyguard/KeyguardIndicationRotateTextViewController.java
++++ b/packages/SystemUI/src/com/android/systemui/keyguard/KeyguardIndicationRotateTextViewController.java
+@@ -158,6 +158,13 @@ public class KeyguardIndicationRotateTextViewController extends
+         long timeSinceLastIndicationSwitch = currTime - mLastIndicationSwitch;
+         boolean currMsgShownForMinTime = timeSinceLastIndicationSwitch >= minShowDuration;
+         if (hasNewIndication) {
++            // Graphite: the battery line refreshes live while charging. Replace the text in place,
++            // because the switch animation would make it blink on every refresh.
++            if (type == INDICATION_TYPE_BATTERY && mCurrIndicationType == type) {
++                mCurrMessage = newIndication.getMessage();
++                mView.switchIndication(mCurrMessage, newIndication, false, null);
++                return;
++            }
+             if (mCurrIndicationType == INDICATION_TYPE_NONE || mCurrIndicationType == type) {
+                 showIndication(type);
+             } else if (showAsap) {

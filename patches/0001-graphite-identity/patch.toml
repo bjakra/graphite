@@ -1,0 +1,17 @@
+title = "Mark builds as Graphite (ro.graphite.build)"
+description = """
+Adds the system property ro.graphite.build=1 to every handheld build
+(build/make/target/product/handheld_system.mk). It lets apps, scripts and bug
+reports distinguish Graphite from official GrapheneOS. Later Graphite features
+(root, settings) can check this property.
+"""
+required = true
+skip_impact = "Builds are indistinguishable from GrapheneOS; Graphite-only code that checks ro.graphite.build would treat the device as stock GrapheneOS."
+category = "branding"
+depends = []
+enabled = true
+notes = "If handheld_system.mk moves, any product makefile inherited by all phones (e.g. base_system.mk) works."
+
+[[change]]
+project = "build/make"
+file = "build_make.patch"

@@ -1,0 +1,21 @@
+title = "Lock screen charging info (current, voltage, power, temperature)"
+description = """
+KeyguardIndicationController appends live charging data to the lock screen battery line
+while plugged in: current (BATTERY_PROPERTY_CURRENT_NOW), voltage and temperature (ACTION_BATTERY_CHANGED)
+and the resulting power. Refreshed every 2 s while plugged in. Off unless Settings.Secure
+graphite_charging_info = 1 (toggle in Graphite settings → Lock screen).
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "The lock screen shows only GrapheneOS' normal charging text; the Graphite toggle does nothing."
+category = "feature"
+depends = ["0002-graphite-vendor-hook"]
+enabled = true
+notes = ""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0400-charging-info --project <path> --new
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"

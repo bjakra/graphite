@@ -1,0 +1,20 @@
+title = "SystemUI: don't list Graphite's system app under active apps"
+description = """
+Hides org.graphite.parts from the active apps list (FgsManagerController). Its only foreground service is
+Caffeine, which has a notification with a stop action, so it stays visible and stoppable. Applies to this one
+package only.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "Graphite appears under active apps while Caffeine is on."
+category = "feature"
+depends = []
+enabled = true
+notes = ""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0460-active-apps-hide-parts --project <path> --new
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"

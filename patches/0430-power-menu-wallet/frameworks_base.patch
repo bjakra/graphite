@@ -1,0 +1,116 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 22:23:04 +0100
+Subject: [PATCH] SystemUI: wallet action in the power menu (default payment
+ app)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../SystemUI/res/values/graphite_strings.xml  |  1 +
+ .../GlobalActionsDialogLite.java              | 59 +++++++++++++++++++
+ .../shared/model/GlobalActionType.kt          |  5 +-
+ 3 files changed, 64 insertions(+), 1 deletion(-)
+
+diff --git a/packages/SystemUI/res/values/graphite_strings.xml b/packages/SystemUI/res/values/graphite_strings.xml
+index dfa5ce37307c7fe1f73a7e759057467e4866eae2..9210b73603f851bd868a8f5af442b142d9ba49d5 100644
+--- a/packages/SystemUI/res/values/graphite_strings.xml
++++ b/packages/SystemUI/res/values/graphite_strings.xml
+@@ -4,4 +4,5 @@
+     <string name="global_action_restart_recovery">Recovery</string>
+     <string name="global_action_restart_bootloader">Bootloader</string>
+     <string name="global_action_restart_systemui">Restart UI</string>
++    <string name="global_action_wallet">Wallet</string>
+ </resources>
+diff --git a/packages/SystemUI/src/com/android/systemui/globalactions/GlobalActionsDialogLite.java b/packages/SystemUI/src/com/android/systemui/globalactions/GlobalActionsDialogLite.java
+index 31b5aa609146aa0b1109ef7e1e40d00cac90af0c..784f6ad534510d3e1ff45ed83d976fc7a5374924 100644
+--- a/packages/SystemUI/src/com/android/systemui/globalactions/GlobalActionsDialogLite.java
++++ b/packages/SystemUI/src/com/android/systemui/globalactions/GlobalActionsDialogLite.java
+@@ -776,6 +776,9 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
+                 case RESTART_SYSTEMUI:
+                     addIfShouldShowAction(tempActions, new RestartSystemUiAction());
+                     break;
++                case WALLET:
++                    addIfShouldShowAction(tempActions, new WalletAction());
++                    break;
+                 case EMERGENCY:
+                     // Only add the standard EmergencyDialerAction if the
+                     // EmergencyAffordanceAction was NOT already handled.
+@@ -1175,6 +1178,62 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
+         }
+     }
+ 
++    /**
++     * Graphite: opens the user's wallet. Prefers the default contactless payment app (Settings →
++     * Connected devices → Contactless payments), so any wallet works, not only Google's; falls back
++     * to the QuickAccessWallet provider, then to the payment settings.
++     */
++    final class WalletAction extends SinglePressAction {
++        WalletAction() {
++            super(com.android.systemui.res.R.drawable.ic_qs_wallet,
++                    com.android.systemui.res.R.string.global_action_wallet);
++        }
++
++        @Override
++        public boolean showDuringKeyguard() {
++            return true;
++        }
++
++        @Override
++        public boolean showBeforeProvisioning() {
++            return false;
++        }
++
++        @Override
++        public void onPress() {
++            Intent intent = getDefaultPaymentAppIntent();
++            if (intent == null) {
++                intent = android.service.quickaccesswallet.QuickAccessWalletClient
++                        .create(mContext).createWalletIntent();
++            }
++            if (intent == null) {
++                // Not ACTION_NFC_PAYMENT_SETTINGS: Settings rejects that fragment on Android 17.
++                intent = new Intent(android.provider.Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS);
++            }
++            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
++            mActivityStarter.startActivity(intent, true /* dismissShade */);
++        }
++
++        private Intent getDefaultPaymentAppIntent() {
++            try {
++                // Same setting CardEmulation.getPreferredPaymentService() reads.
++                String setting = android.provider.Settings.Secure.getString(
++                        mContext.getContentResolver(),
++                        android.provider.Settings.Secure.NFC_PAYMENT_DEFAULT_COMPONENT);
++                ComponentName service = setting == null
++                        ? null : ComponentName.unflattenFromString(setting);
++                if (service == null) {
++                    return null;
++                }
++                return mContext.getPackageManager()
++                        .getLaunchIntentForPackage(service.getPackageName());
++            } catch (RuntimeException e) {
++                Log.w(TAG, "Could not resolve the default payment app", e);
++                return null;
++            }
++        }
++    }
++
+     /** Graphite: restarts SystemUI only (quick fix for a stuck UI, keeps apps running). */
+     final class RestartSystemUiAction extends SinglePressAction {
+         RestartSystemUiAction() {
+diff --git a/packages/SystemUI/src/com/android/systemui/globalactions/shared/model/GlobalActionType.kt b/packages/SystemUI/src/com/android/systemui/globalactions/shared/model/GlobalActionType.kt
+index 62a39adda51e7f434b37eb8b758d4538e52aa50b..a92c74db9c7a749ef74f1e1d809f1822d7f469fb 100644
+--- a/packages/SystemUI/src/com/android/systemui/globalactions/shared/model/GlobalActionType.kt
++++ b/packages/SystemUI/src/com/android/systemui/globalactions/shared/model/GlobalActionType.kt
+@@ -38,7 +38,10 @@ enum class GlobalActionType(val configKey: String) {
+     // Graphite: advanced restart targets
+     RESTART_RECOVERY("restart_recovery"),
+     RESTART_BOOTLOADER("restart_bootloader"),
+-    RESTART_SYSTEMUI("restart_systemui");
++    RESTART_SYSTEMUI("restart_systemui"),
++
++    // Graphite: the user's default wallet / contactless payment app
++    WALLET("wallet");
+ 
+     companion object {
+         private val KEY_MAP = entries.associateBy { it.configKey }

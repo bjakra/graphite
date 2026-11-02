@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Graphite-owned projects. They live as local git repos in $GRAPHITE_ROOT/projects;
+     build.sh replaces @GRAPHITE_ROOT@ when it installs this file as a local manifest.
+     To publish them later, point the remote at GitHub instead. -->
+<manifest>
+  <remote name="graphite-local" fetch="file://@GRAPHITE_ROOT@/projects" />
+
+  <project path="vendor/graphite" name="vendor_graphite.git" remote="graphite-local" revision="main" />
+  <project path="packages/apps/GraphiteParts" name="packages_apps_GraphiteParts.git" remote="graphite-local" revision="main" />
+  <project path="packages/apps/GraphiteWeather" name="packages_apps_GraphiteWeather.git" remote="graphite-local" revision="main" />
+</manifest>

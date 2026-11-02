@@ -1,0 +1,21 @@
+title = "SystemUI: connect to the launcher after the first unlock"
+description = """
+LauncherProxyService checks at boot whether the recents provider's service resolves, and otherwise only
+when that package changes. Lawnchair's TouchInteractionService isn't direct boot aware (Lawnchair keeps
+its settings in credential encrypted storage), so with a PIN set it doesn't resolve at boot. This re-checks
+on ACTION_USER_UNLOCKED, right before the existing reconnect.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = true
+skip_impact = "With a PIN set, gestures and the navigation handle stay missing after a reboot."
+category = "feature"
+depends = []
+enabled = true
+notes = ""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0440-recents-bind-after-unlock --project <path> --new
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"

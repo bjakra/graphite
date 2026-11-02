@@ -1,0 +1,15 @@
+# source tree and build output
+/src/
+/work/
+/logs/
+/reports/
+/state/
+# private
+/keys/*
+!/keys/trust/
+/graphite.local.conf
+__pycache__/
+/apps/
+/sdk/
+/projects/
+/.claude/

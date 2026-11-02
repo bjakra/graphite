@@ -1,0 +1,11 @@
+diff --git a/quickstep/src/com/android/launcher3/uioverrides/touchcontrollers/TaskViewTouchControllerDeprecated.java b/quickstep/src/com/android/launcher3/uioverrides/touchcontrollers/TaskViewTouchControllerDeprecated.java
+index b57eba547f..d9b0366a40 100644
+--- a/quickstep/src/com/android/launcher3/uioverrides/touchcontrollers/TaskViewTouchControllerDeprecated.java
++++ b/quickstep/src/com/android/launcher3/uioverrides/touchcontrollers/TaskViewTouchControllerDeprecated.java
+@@ -394,4 +394,4 @@ public class TaskViewTouchControllerDeprecated<
+         mCurrentAnimation = null;
+         mIsDismissHapticRunning = false;
+     }
+-}
++}
+\ No newline at end of file

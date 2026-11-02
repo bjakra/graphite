@@ -1,0 +1,21 @@
+title = "Include Graphite's product configuration (vendor/graphite)"
+description = """
+Makes handheld_system_ext.mk inherit vendor/graphite/config/common.mk. That makefile lives in
+Graphite's own repo (projects/vendor_graphite.git, synced through manifests/projects.xml) and lists
+Graphite's packages (GraphiteParts, prebuilt apps), overlays and permissions. Keeping that list in
+our own repo means this patch stays a single line no matter how many features are added.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = true
+skip_impact = "None of Graphite's own apps, overlays or permissions are installed: no Graphite settings page, tiles or prebuilt apps. Patches to GrapheneOS code still apply."
+category = "branding"
+depends = ["0001-graphite-identity"]
+enabled = true
+notes = "Any product makefile inherited by all phones works (e.g. base_system_ext.mk) if handheld_system_ext.mk moves. inherit-product-if-exists keeps builds working without vendor/graphite."
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0002-graphite-vendor-hook --project <path> --new
+
+[[change]]
+project = "build/make"
+file = "build_make.patch"

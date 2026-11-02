@@ -1,0 +1,228 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 22:19:35 +0100
+Subject: [PATCH] SystemUI: configurable power menu actions and advanced
+ restart
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ data/etc/com.android.systemui.xml             |  2 +
+ packages/SystemUI/AndroidManifest.xml         |  2 +
+ .../SystemUI/res/values/graphite_strings.xml  |  7 ++
+ .../GlobalActionsDialogLite.java              | 76 +++++++++++++++++++
+ .../impl/GlobalActionsRepositoryImpl.kt       | 22 +++++-
+ .../shared/model/GlobalActionType.kt          |  7 +-
+ 6 files changed, 112 insertions(+), 4 deletions(-)
+ create mode 100644 packages/SystemUI/res/values/graphite_strings.xml
+
+diff --git a/data/etc/com.android.systemui.xml b/data/etc/com.android.systemui.xml
+index eb873efb1d2f108d6e7d2e864ff1705554f3fabf..93226dd039f3a1aa674784d306b7ff5c4a4f5300 100644
+--- a/data/etc/com.android.systemui.xml
++++ b/data/etc/com.android.systemui.xml
+@@ -16,6 +16,8 @@
+   -->
+ <permissions>
+     <privapp-permissions package="com.android.systemui">
++        <!-- Graphite: advanced restart (recovery / bootloader) in the power menu -->
++        <permission name="android.permission.REBOOT"/>
+         <permission name="android.permission.CAPTURE_AUDIO_OUTPUT"/>
+         <permission name="android.permission.ALLOW_SLIPPERY_TOUCHES"/>
+         <permission name="android.permission.BATTERY_STATS"/>
+diff --git a/packages/SystemUI/AndroidManifest.xml b/packages/SystemUI/AndroidManifest.xml
+index d2a7ba046774f0443c41d23dfa4f61136ca1bffb..482239ebf834222b9120e5287b8716f119a16bbb 100644
+--- a/packages/SystemUI/AndroidManifest.xml
++++ b/packages/SystemUI/AndroidManifest.xml
+@@ -42,6 +42,8 @@
+ 
+     <uses-permission android:name="android.permission.STATUS_BAR_SERVICE" />
+     <uses-permission android:name="android.permission.STATUS_BAR" />
++    <!-- Graphite: advanced restart (recovery / bootloader) in the power menu -->
++    <uses-permission android:name="android.permission.REBOOT" />
+     <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
+     <uses-permission android:name="android.permission.REMOTE_AUDIO_PLAYBACK" />
+ 
+diff --git a/packages/SystemUI/res/values/graphite_strings.xml b/packages/SystemUI/res/values/graphite_strings.xml
+new file mode 100644
+index 0000000000000000000000000000000000000000..dfa5ce37307c7fe1f73a7e759057467e4866eae2
+--- /dev/null
++++ b/packages/SystemUI/res/values/graphite_strings.xml
+@@ -0,0 +1,7 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Graphite: strings for Graphite's SystemUI additions -->
++<resources>
++    <string name="global_action_restart_recovery">Recovery</string>
++    <string name="global_action_restart_bootloader">Bootloader</string>
++    <string name="global_action_restart_systemui">Restart UI</string>
++</resources>
+diff --git a/packages/SystemUI/src/com/android/systemui/globalactions/GlobalActionsDialogLite.java b/packages/SystemUI/src/com/android/systemui/globalactions/GlobalActionsDialogLite.java
+index dc11e240c285dc95e0308ab3d323dcbfc8606c3b..31b5aa609146aa0b1109ef7e1e40d00cac90af0c 100644
+--- a/packages/SystemUI/src/com/android/systemui/globalactions/GlobalActionsDialogLite.java
++++ b/packages/SystemUI/src/com/android/systemui/globalactions/GlobalActionsDialogLite.java
+@@ -762,6 +762,20 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
+                 case STANDBY:
+                     addIfShouldShowAction(tempActions, new StandbyAction());
+                     break;
++                // Graphite: advanced restart
++                case RESTART_RECOVERY:
++                    addIfShouldShowAction(tempActions, new AdvancedRestartAction(
++                            com.android.systemui.res.R.string.global_action_restart_recovery,
++                            PowerManager.REBOOT_RECOVERY));
++                    break;
++                case RESTART_BOOTLOADER:
++                    addIfShouldShowAction(tempActions, new AdvancedRestartAction(
++                            com.android.systemui.res.R.string.global_action_restart_bootloader,
++                            "bootloader"));
++                    break;
++                case RESTART_SYSTEMUI:
++                    addIfShouldShowAction(tempActions, new RestartSystemUiAction());
++                    break;
+                 case EMERGENCY:
+                     // Only add the standard EmergencyDialerAction if the
+                     // EmergencyAffordanceAction was NOT already handled.
+@@ -789,6 +803,14 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
+             tempActions.remove(restartAction);
+             mPowerItems.add(shutdownAction);
+             mPowerItems.add(restartAction);
++            // Graphite: advanced restart targets go into the same submenu
++            for (Action action : new ArrayList<>(tempActions)) {
++                if (action instanceof AdvancedRestartAction
++                        || action instanceof RestartSystemUiAction) {
++                    tempActions.remove(action);
++                    mPowerItems.add(action);
++                }
++            }
+ 
+             // add the PowerOptionsAction after Emergency, if present
+             tempActions.add(powerOptionsIndex, new PowerOptionsAction());
+@@ -1125,6 +1147,60 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
+         }
+     }
+ 
++    /** Graphite: reboots into recovery or the bootloader. */
++    final class AdvancedRestartAction extends SinglePressAction {
++        private final String mReason;
++
++        AdvancedRestartAction(int messageResId, String reason) {
++            super(com.android.systemui.res.R.drawable.ic_global_actions_restart, messageResId);
++            mReason = reason;
++        }
++
++        @Override
++        public boolean showDuringKeyguard() {
++            return true;
++        }
++
++        @Override
++        public boolean showBeforeProvisioning() {
++            return false;
++        }
++
++        @Override
++        public void onPress() {
++            if (ActivityManager.isUserAMonkey()) {
++                return;
++            }
++            mContext.getSystemService(PowerManager.class).reboot(mReason);
++        }
++    }
++
++    /** Graphite: restarts SystemUI only (quick fix for a stuck UI, keeps apps running). */
++    final class RestartSystemUiAction extends SinglePressAction {
++        RestartSystemUiAction() {
++            super(com.android.systemui.res.R.drawable.ic_global_actions_restart,
++                    com.android.systemui.res.R.string.global_action_restart_systemui);
++        }
++
++        @Override
++        public boolean showDuringKeyguard() {
++            return true;
++        }
++
++        @Override
++        public boolean showBeforeProvisioning() {
++            return false;
++        }
++
++        @Override
++        public void onPress() {
++            if (ActivityManager.isUserAMonkey()) {
++                return;
++            }
++            android.os.Process.killProcess(android.os.Process.myPid());
++        }
++    }
++
+     @VisibleForTesting
+     final class RestartSafeModeAction extends SinglePressAction {
+         private final Context mContext;
+diff --git a/packages/SystemUI/src/com/android/systemui/globalactions/data/repository/impl/GlobalActionsRepositoryImpl.kt b/packages/SystemUI/src/com/android/systemui/globalactions/data/repository/impl/GlobalActionsRepositoryImpl.kt
+index 38aebd4709cf8ff19bce3c3bfdf42004a7a6cca2..c7f778c4ed91fb2aa7ca6f1c5946b85b9dfa066e 100644
+--- a/packages/SystemUI/src/com/android/systemui/globalactions/data/repository/impl/GlobalActionsRepositoryImpl.kt
++++ b/packages/SystemUI/src/com/android/systemui/globalactions/data/repository/impl/GlobalActionsRepositoryImpl.kt
+@@ -17,6 +17,8 @@
+ package com.android.systemui.globalactions.data.repository.impl
+ 
+ import android.content.Context
++import android.os.UserHandle
++import android.provider.Settings
+ import android.util.Log
+ import com.android.internal.R
+ import com.android.systemui.dagger.SysUISingleton
+@@ -41,9 +43,13 @@ constructor(@param:Application private val context: Context) : GlobalActionsRepo
+         _isVisible.value = isVisible
+     }
+ 
+-    /** The list of available global actions. */
+-    override val possibleGlobalActions: List<GlobalActionType> =
+-        context.resources.getStringArray(R.array.config_globalActionsList).mapNotNull { key ->
++    /**
++     * The list of available global actions. Graphite: the user's list and order from
++     * Settings.Secure graphite_power_menu_actions (comma-separated config keys) replace
++     * config_globalActionsList when set.
++     */
++    override val possibleGlobalActions: List<GlobalActionType>
++        get() = actionKeys().mapNotNull { key ->
+             val actionType = GlobalActionType.fromConfigKey(key)
+             if (actionType == null) {
+                 Log.e(TAG, "Invalid global action key in config_globalActionsList: $key")
+@@ -51,6 +57,15 @@ constructor(@param:Application private val context: Context) : GlobalActionsRepo
+             actionType
+         }
+ 
++    private fun actionKeys(): List<String> {
++        val custom = Settings.Secure.getStringForUser(
++            context.contentResolver, POWER_MENU_ACTIONS, UserHandle.USER_CURRENT)
++        val keys = custom?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }
++        // An empty list would leave no way to power off; fall back to the default then.
++        if (!keys.isNullOrEmpty() && "power" in keys) return keys
++        return context.resources.getStringArray(R.array.config_globalActionsList).toList()
++    }
++
+     /** Actions not available when device is unprovisioned */
+     override val unprovisionedDeviceStateBlockList: List<GlobalActionType> =
+         listOf(
+@@ -70,5 +85,6 @@ constructor(@param:Application private val context: Context) : GlobalActionsRepo
+ 
+     companion object {
+         private const val TAG = "GlobalActionsRepositoryImpl"
++        private const val POWER_MENU_ACTIONS = "graphite_power_menu_actions"
+     }
+ }
+diff --git a/packages/SystemUI/src/com/android/systemui/globalactions/shared/model/GlobalActionType.kt b/packages/SystemUI/src/com/android/systemui/globalactions/shared/model/GlobalActionType.kt
+index 062438523c7f3bfe49c1cde4bcdfc38e02de4632..62a39adda51e7f434b37eb8b758d4538e52aa50b 100644
+--- a/packages/SystemUI/src/com/android/systemui/globalactions/shared/model/GlobalActionType.kt
++++ b/packages/SystemUI/src/com/android/systemui/globalactions/shared/model/GlobalActionType.kt
+@@ -33,7 +33,12 @@ enum class GlobalActionType(val configKey: String) {
+     EMERGENCY("emergency"),
+     SCREENSHOT("screenshot"),
+     SYSTEM_UPDATE("system_update"),
+-    STANDBY("standby");
++    STANDBY("standby"),
++
++    // Graphite: advanced restart targets
++    RESTART_RECOVERY("restart_recovery"),
++    RESTART_BOOTLOADER("restart_bootloader"),
++    RESTART_SYSTEMUI("restart_systemui");
+ 
+     companion object {
+         private val KEY_MAP = entries.associateBy { it.configKey }

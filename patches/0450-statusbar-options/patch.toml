@@ -1,0 +1,21 @@
+title = "SystemUI: clock AM/PM and position, network speed"
+description = """
+Status bar options from Graphite settings, all off by default: AM/PM in 12-hour time
+(graphite_clock_am_pm) and
+a network speed view (NetworkTrafficView, graphite_network_traffic). No centred clock: the
+Pixel 8 Pro camera cutout is in the middle.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "Those three status bar options do nothing."
+category = "feature"
+depends = []
+enabled = true
+notes = ""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0450-statusbar-options --project <path> --new
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"

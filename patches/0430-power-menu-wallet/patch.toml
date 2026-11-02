@@ -1,0 +1,22 @@
+title = "Power menu: wallet action (default payment app)"
+description = """
+Adds GlobalActionType WALLET ("wallet") and WalletAction to SystemUI's power menu. It opens the
+user's default contactless payment app (CardEmulation default for CATEGORY_PAYMENT), so any
+wallet works (e.g. a bank's own payment app), not only Google Wallet. Falls back to the
+QuickAccessWallet provider, then to Settings' default apps page. Enabled through the
+Graphite power menu editor (graphite_power_menu_actions).
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "No wallet button in the power menu; a \"wallet\" entry in graphite_power_menu_actions is ignored with a log line."
+category = "feature"
+depends = ["0410-power-menu-actions"]
+enabled = true
+notes = ""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0430-power-menu-wallet --project <path> --new
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"

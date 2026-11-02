@@ -1,0 +1,24 @@
+title = "FLAG_SECURE override for system screenshots only"
+description = """
+SECURITY-RELEVANT (relaxes FLAG_SECURE, opt-in per app). For apps listed in Settings.Secure
+graphite_secure_override_packages, SystemUI's own full-screen screenshots request
+SECURE_CONTENT_POLICY_CAPTURE (the capture runs in system_server through IWindowManager.captureDisplay,
+which needs READ_FRAME_BUFFER). Apps keep FLAG_SECURE for everything else: third-party capture,
+MediaProjection, casting and recents thumbnails stay black. With graphite_secure_override_stealth = 1 the
+app is not notified through ScreenCaptureCallback. Empty list by default. Code: screenshot/GraphiteSecureOverride.kt,
+ImageCapture(Impl), PolicyRequestProcessor, ScreenshotDetectionController.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "Protected apps stay black in all screenshots, including system ones; the Graphite override list does nothing."
+category = "feature"
+depends = ["0002-graphite-vendor-hook"]
+enabled = true
+notes = ""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0420-secure-screenshot-override --project <path> --new
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"

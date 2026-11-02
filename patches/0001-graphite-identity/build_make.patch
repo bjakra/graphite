@@ -1,0 +1,22 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 14:01:54 +0100
+Subject: [PATCH] Graphite: add ro.graphite.build marker property
+
+---
+ target/product/handheld_system.mk | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/target/product/handheld_system.mk b/target/product/handheld_system.mk
+index 029bdd6ef3c898e82a68dc8c5553458a4810ca33..b7e0b4575d97e3d91e0443bce18bddc0c6968aef 100644
+--- a/target/product/handheld_system.mk
++++ b/target/product/handheld_system.mk
+@@ -131,3 +131,8 @@ PRODUCT_VENDOR_PROPERTIES += \
+     ro.carrier?=unknown \
+     ro.config.notification_sound?=OnTheHunt.ogg \
+     ro.config.alarm_alert?=Alarm_Classic.ogg
++
++# Graphite: mark the build as a Graphite (GrapheneOS-derived) build so apps,
++# scripts and bug reports can tell it apart from official GrapheneOS.
++PRODUCT_SYSTEM_PROPERTIES += \
++    ro.graphite.build=1

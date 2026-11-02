@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 08:14:54 +0100
+Subject: [PATCH] SystemUI: connect to the launcher after the first unlock
+
+LauncherProxyService checks at boot whether the recents provider's service resolves and never
+again unless the package changes. Lawnchair's service isn't direct boot aware, because Lawnchair
+keeps its settings in credential encrypted storage, so with a PIN set it didn't resolve at boot and
+gestures and the navigation handle stayed missing. Re-check when the user unlocks.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../src/com/android/systemui/LauncherProxyService.java         | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/packages/SystemUI/src/com/android/systemui/LauncherProxyService.java b/packages/SystemUI/src/com/android/systemui/LauncherProxyService.java
+index e6ad618d5af0972cfa69787ff4c54eeb3196ba4d..fd750e6255ba183d2e582ce32e64b97df32fc49f 100644
+--- a/packages/SystemUI/src/com/android/systemui/LauncherProxyService.java
++++ b/packages/SystemUI/src/com/android/systemui/LauncherProxyService.java
+@@ -546,6 +546,9 @@ public class LauncherProxyService implements CallbackController<LauncherProxyLis
+         @Override
+         public void onReceive(Context context, Intent intent) {
+             if (Objects.equals(intent.getAction(), Intent.ACTION_USER_UNLOCKED)) {
++                // Graphite: Lawnchair's service isn't direct boot aware, so it didn't resolve
++                // before the unlock. Check again, or the launcher would never be connected.
++                updateEnabledState();
+                 // Start the launcher connection to the launcher service
+                 // Connect if user hasn't connected yet
+                 if (getProxy() == null) {

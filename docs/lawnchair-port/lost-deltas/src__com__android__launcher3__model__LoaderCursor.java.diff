@@ -1,0 +1,160 @@
+diff --git a/src/com/android/launcher3/model/LoaderCursor.java b/src/com/android/launcher3/model/LoaderCursor.java
+index 7411afb45e..907d46730a 100644
+--- a/src/com/android/launcher3/model/LoaderCursor.java
++++ b/src/com/android/launcher3/model/LoaderCursor.java
+@@ -31,6 +31,7 @@ import android.content.Context;
+ import android.content.Intent;
+ import android.content.pm.LauncherActivityInfo;
+ import android.content.pm.LauncherApps;
++import android.content.pm.PackageManager;
+ import android.database.Cursor;
+ import android.database.CursorWrapper;
+ import android.os.UserHandle;
+@@ -43,6 +44,7 @@ import androidx.annotation.Nullable;
+ import androidx.annotation.VisibleForTesting;
+ 
+ import com.android.launcher3.BuildConfig;
++import com.android.launcher3.BuildConfigs;
+ import com.android.launcher3.Flags;
+ import com.android.launcher3.InvariantDeviceProfile;
+ import com.android.launcher3.LauncherModel;
+@@ -78,6 +80,10 @@ import dagger.assisted.AssistedInject;
+ import java.net.URISyntaxException;
+ import java.security.InvalidParameterException;
+ 
++import app.lawnchair.preferences2.PreferenceCacheExtensionsKt;
++import app.lawnchair.LawnchairApp;
++import app.lawnchair.preferences2.PreferenceManager2;
++
+ /**
+  * Extension of {@link Cursor} with utility methods for workspace loading.
+  */
+@@ -124,6 +130,8 @@ public class LoaderCursor extends CursorWrapper {
+     private final int mOptionsIndex;
+     private final int mAppWidgetSourceIndex;
+ 
++    private final PackageManager mPM;
++
+     @Nullable
+     private LauncherActivityInfo mActivityInfo;
+ 
+@@ -134,6 +142,7 @@ public class LoaderCursor extends CursorWrapper {
+     public int container;
+     public int itemType;
+     public int restoreFlag;
++    private PreferenceManager2 preferenceManager2;
+ 
+     @AssistedInject
+     public LoaderCursor(
+@@ -155,6 +164,9 @@ public class LoaderCursor extends CursorWrapper {
+         allUsers = userManagerState.allUsers;
+         mRestoreEventLogger = restoreEventLogger;
+ 
++        preferenceManager2 = PreferenceManager2.getInstance(mContext);
++        mPM = mContext.getPackageManager();
++
+         // Init column indices
+         mIconIndex = getColumnIndexOrThrow(Favorites.ICON);
+         mTitleIndex = getColumnIndexOrThrow(Favorites.TITLE);
+@@ -233,7 +245,8 @@ public class LoaderCursor extends CursorWrapper {
+ 
+     public IconRequestInfo<WorkspaceItemInfo> createIconRequestInfo(
+             WorkspaceItemInfo wai, boolean useLowResIcon) {
+-        byte[] iconBlob = itemType == Favorites.ITEM_TYPE_DEEP_SHORTCUT || restoreFlag != 0
++        byte[] iconBlob = itemType == Favorites.ITEM_TYPE_SHORTCUT
++                || itemType == Favorites.ITEM_TYPE_DEEP_SHORTCUT || restoreFlag != 0
+                 || (wai.isInactiveArchive() && Flags.restoreArchivedAppIconsFromDb())
+                 ? getIconBlob() : null;
+         return new IconRequestInfo<>(wai, mActivityInfo, iconBlob,
+@@ -345,7 +358,7 @@ public class LoaderCursor extends CursorWrapper {
+             throw new InvalidParameterException("Invalid restoreType " + restoreFlag);
+         }
+ 
+-        info.contentDescription = mIconCache.getUserBadgedLabel(info.title, info.user);
++        info.contentDescription = mPM.getUserBadgedLabel(info.title, info.user);
+         info.itemType = itemType;
+         info.status = restoreFlag;
+         if (isArchived) info.runtimeStatusFlags |= FLAG_ARCHIVED;
+@@ -411,7 +424,7 @@ public class LoaderCursor extends CursorWrapper {
+             }
+         }
+ 
+-        info.contentDescription = mIconCache.getUserBadgedLabel(info.title, info.user);
++        info.contentDescription = mPM.getUserBadgedLabel(info.title, info.user);
+         return info;
+     }
+ 
+@@ -421,7 +434,7 @@ public class LoaderCursor extends CursorWrapper {
+             boolean loadIconFromCache,
+             WorkspaceItemInfo info
+     ) {
+-        boolean isPreArchived = Flags.enableSupportForArchiving()
++        boolean isPreArchived = Utilities.ATLEAST_V && Flags.enableSupportForArchiving()
+                 && Flags.restoreArchivedAppIconsFromDb()
+                 && info.isInactiveArchive()
+                 && LauncherPrefs.get(mContext).get(LauncherPrefs.IS_FIRST_LOAD_AFTER_RESTORE);
+@@ -550,7 +563,8 @@ public class LoaderCursor extends CursorWrapper {
+ 
+     /**
+      * Adds the {@param info} to {@param dataModel} if it does not overlap with any other item,
+-     * otherwise marks it for deletion.
++     * otherwise marks it for deletion. Hotseat items past the current hotseat size are skipped
++     * but kept.
+      */
+     public void checkAndAddItem(
+             ItemInfo info, IntSparseArrayMap<ItemInfo> loadedItems, LoaderMemoryLogger logger) {
+@@ -570,7 +584,8 @@ public class LoaderCursor extends CursorWrapper {
+             loadedItems.put(info.id, info);
+             if ((info.itemType == ITEM_TYPE_APP_PAIR
+                     || info.itemType == ITEM_TYPE_DEEP_SHORTCUT
+-                    || info.itemType == ITEM_TYPE_APPLICATION)
++                    || info.itemType == ITEM_TYPE_APPLICATION
++                    || info.itemType == Favorites.ITEM_TYPE_SHORTCUT)
+                     && info.container != CONTAINER_DESKTOP
+                     && info.container != CONTAINER_HOTSEAT) {
+                 findOrMakeFolder(info.container, loadedItems).add(info);
+@@ -578,11 +593,26 @@ public class LoaderCursor extends CursorWrapper {
+             if (mRestoreEventLogger != null) {
+                 mRestoreEventLogger.logSingleFavoritesItemRestored(itemType);
+             }
++        } else if (isHotseatItemOutOfBounds(info)) {
++            // LC-Note: The hotseat can be smaller for a while (e.g. while a foldable is folded, or
++            // after a transient DeviceProfile change), and deleting the item would lose it for
++            // good. Don't bind it, but keep it in the database so it shows up again once the
++            // hotseat is large enough.
++            FileLog.d(TAG, "Keeping hotseat item out of bounds in the database: " + info);
+         } else {
+             markDeleted("Item position overlap", RestoreError.OVERLAPPING_ITEM);
+         }
+     }
+ 
++    /**
++     * Returns whether {@param item} is in the hotseat, at a position past the hotseat size of the
++     * current grid.
++     */
++    private boolean isHotseatItemOutOfBounds(ItemInfo item) {
++        return item.container == Favorites.CONTAINER_HOTSEAT
++                && item.screenId >= mIDP.numDatabaseHotseatIcons;
++    }
++
+     /**
+      * check & update map of what's occupied; used to discard overlapping/invalid items
+      */
+@@ -634,7 +664,7 @@ public class LoaderCursor extends CursorWrapper {
+ 
+         if (!mOccupied.containsKey(item.screenId)) {
+             GridOccupancy screen = new GridOccupancy(countX + 1, countY + 1);
+-            if (item.screenId == Workspace.FIRST_SCREEN_ID && BuildConfig.QSB_ON_FIRST_SCREEN) {
++            if (item.screenId == Workspace.FIRST_SCREEN_ID && PreferenceCacheExtensionsKt.firstCached(preferenceManager2.getEnableSmartspace())) {
+                 // Mark the first X columns (X is width of the search container) in the first row as
+                 // occupied (if the feature is enabled) in order to account for the search
+                 // container.
+@@ -655,7 +685,7 @@ public class LoaderCursor extends CursorWrapper {
+                     + " into cell (" + containerIndex + "-" + item.screenId + ":"
+                     + item.cellX + "," + item.cellX + "," + item.spanX + "," + item.spanY
+                     + ") already occupied");
+-            return false;
++            return PreferenceCacheExtensionsKt.firstCached(preferenceManager2.getAllowWidgetOverlap());
+         }
+     }
+ 

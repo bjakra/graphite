@@ -1,0 +1,23 @@
+title = "Power menu: configurable actions and advanced restart"
+description = """
+GlobalActionsRepositoryImpl reads the action list and order from Settings.Secure
+graphite_power_menu_actions (comma-separated config keys) instead of config_globalActionsList when set
+and it contains power. New action types restart_recovery, restart_bootloader (PowerManager.reboot) and
+restart_systemui (kills SystemUI, which restarts). SystemUI gains android.permission.REBOOT (manifest +
+privapp allowlist data/etc/com.android.systemui.xml). Strings in res/values/graphite_strings.xml. The editor
+is in Graphite settings → Power menu.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "The power menu uses GrapheneOS' fixed list; Graphite's power menu editor and advanced restart do nothing."
+category = "feature"
+depends = ["0002-graphite-vendor-hook"]
+enabled = true
+notes = ""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0410-power-menu-actions --project <path> --new
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"

@@ -1,0 +1,125 @@
+diff --git a/src/com/android/launcher3/widget/picker/WidgetsFullSheet.java b/src/com/android/launcher3/widget/picker/WidgetsFullSheet.java
+index 99c10b2616..cc4e4c56c3 100644
+--- a/src/com/android/launcher3/widget/picker/WidgetsFullSheet.java
++++ b/src/com/android/launcher3/widget/picker/WidgetsFullSheet.java
+@@ -29,6 +29,8 @@ import android.animation.Animator;
+ import android.content.Context;
+ import android.content.res.Resources;
+ import android.graphics.Rect;
++import android.os.Build.VERSION;
++import android.os.Build.VERSION_CODES;
+ import android.os.Bundle;
+ import android.os.Parcelable;
+ import android.os.Process;
+@@ -42,6 +44,7 @@ import android.view.MotionEvent;
+ import android.view.View;
+ import android.view.ViewConfiguration;
+ import android.view.ViewGroup;
++import android.view.Window;
+ import android.view.ViewParent;
+ import android.view.WindowInsets;
+ import android.view.WindowInsetsController;
+@@ -55,12 +58,16 @@ import androidx.annotation.NonNull;
+ import androidx.annotation.Nullable;
+ import androidx.annotation.Px;
+ import androidx.annotation.VisibleForTesting;
++import androidx.collection.SparseArrayCompat;
++import androidx.core.view.WindowInsetsCompat;
++import androidx.core.view.WindowInsetsControllerCompat;
+ import androidx.recyclerview.widget.DefaultItemAnimator;
+ import androidx.recyclerview.widget.RecyclerView;
+ 
+ import com.android.launcher3.BaseActivity;
+ import com.android.launcher3.DeviceProfile;
+ import com.android.launcher3.R;
++import com.android.launcher3.Utilities;
+ import com.android.launcher3.anim.PendingAnimation;
+ import com.android.launcher3.compat.AccessibilityManagerCompat;
+ import com.android.launcher3.model.UserManagerState;
+@@ -86,6 +93,10 @@ import java.util.Map;
+ import java.util.function.Predicate;
+ import java.util.stream.IntStream;
+ 
++import app.lawnchair.font.FontManager;
++import app.lawnchair.theme.color.tokens.ColorTokens;
++import app.lawnchair.theme.drawable.DrawableTokens;
++
+ /**
+  * Popup for showing the full list of available widgets
+  */
+@@ -196,6 +207,11 @@ public class WidgetsFullSheet extends BaseWidgetSheet
+     @Override
+     protected void onFinishInflate() {
+         super.onFinishInflate();
++        mContent = findViewById(R.id.container);
++        mContent.setBackground(DrawableTokens.BgWidgetsFullSheet.resolve(getContext()));
++
++        View collapseHandle = findViewById(R.id.collapse_handle);
++        collapseHandle.setBackgroundColor(ColorTokens.TextColorSecondary.resolveColor(getContext()));
+ 
+         mContent = findViewById(R.id.container);
+         setContentBackgroundWithParent(getContext().getDrawable(R.drawable.bg_widgets_full_sheet),
+@@ -261,7 +277,12 @@ public class WidgetsFullSheet extends BaseWidgetSheet
+         }
+ 
+         mTabBar = mSearchScrollView.findViewById(R.id.tabs);
++        if (mTabBar != null) {
++            mTabBar.setBackground(DrawableTokens.BgWidgetsFullSheet.resolve(getContext()));
++        }
+         mSearchBarContainer = mSearchScrollView.findViewById(R.id.search_bar_container);
++        mSearchBarContainer.setBackgroundColor(ColorTokens.ColorBackground.resolveColor(getContext()));
++
+         mSearchBar = mSearchScrollView.findViewById(R.id.widgets_search_bar);
+ 
+         mSearchBar.initialize(new WidgetsSearchDataProvider() {
+@@ -281,10 +302,14 @@ public class WidgetsFullSheet extends BaseWidgetSheet
+     private void setDeviceManagementResources() {
+         if (mActivityContext.getStringCache() != null) {
+             Button personalTab = findViewById(R.id.tab_personal);
+-            personalTab.setText(mActivityContext.getStringCache().widgetsPersonalTab);
++            personalTab.setText(R.string.all_apps_personal_tab);
++            personalTab.setAllCaps(false);
++            FontManager.INSTANCE.get(getContext()).setCustomFont(personalTab, R.id.font_button);
+ 
+             Button workTab = findViewById(R.id.tab_work);
+-            workTab.setText(mActivityContext.getStringCache().widgetsWorkTab);
++            workTab.setText(R.string.all_apps_work_tab);
++            workTab.setAllCaps(false);
++            FontManager.INSTANCE.get(getContext()).setCustomFont(workTab, R.id.font_button);
+         }
+     }
+ 
+@@ -921,9 +946,16 @@ public class WidgetsFullSheet extends BaseWidgetSheet
+     }
+ 
+     private void restoreAdapterStates(SparseArray<AdapterHolder> adapters) {
+-        if (adapters.contains(AdapterHolder.WORK)) {
+-            mAdapters.get(AdapterHolder.WORK).mWidgetsListAdapter.restoreState(
++        if (Utilities.ATLEAST_R) {
++            if (adapters.contains(AdapterHolder.WORK)) {
++                mAdapters.get(AdapterHolder.WORK).mWidgetsListAdapter.restoreState(
++                        adapters.get(AdapterHolder.WORK).mWidgetsListAdapter);
++            }
++        } else {
++            if (adapters.indexOfKey(AdapterHolder.WORK) >= 0) {
++                mAdapters.get(AdapterHolder.WORK).mWidgetsListAdapter.restoreState(
+                     adapters.get(AdapterHolder.WORK).mWidgetsListAdapter);
++            }
+         }
+         mAdapters.get(AdapterHolder.PRIMARY).mWidgetsListAdapter.restoreState(
+                 adapters.get(AdapterHolder.PRIMARY).mWidgetsListAdapter);
+@@ -966,9 +998,11 @@ public class WidgetsFullSheet extends BaseWidgetSheet
+     @Override
+     public void onDragStart(boolean start, float startDisplacement) {
+         super.onDragStart(start, startDisplacement);
+-        WindowInsetsController insetsController = getWindowInsetsController();
+-        if (insetsController != null) {
+-            insetsController.hide(WindowInsets.Type.ime());
++        if ( Utilities.ATLEAST_R) {
++            WindowInsetsController insetsController = getWindowInsetsController();
++            if (insetsController != null) {
++                insetsController.hide(WindowInsets.Type.ime());
++            }
+         }
+     }
+ 

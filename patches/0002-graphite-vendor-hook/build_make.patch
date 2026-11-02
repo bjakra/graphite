@@ -1,0 +1,22 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 20:54:42 +0100
+Subject: [PATCH] Graphite: inherit vendor/graphite product configuration
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ target/product/handheld_system_ext.mk | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/target/product/handheld_system_ext.mk b/target/product/handheld_system_ext.mk
+index 529fa6f3331af8014867dcf7e5e5b79195eed680..e3e3ca26c5fe265ecab1944d166272c5ffe61036 100644
+--- a/target/product/handheld_system_ext.mk
++++ b/target/product/handheld_system_ext.mk
+@@ -34,3 +34,7 @@ PRODUCT_PACKAGES += \
+ 
+ # Allowlist for system packages included in handheld_system_ext.mk
+ PRODUCT_PACKAGES += preinstalled-packages-handheld-system-ext.xml
++
++# Graphite: packages, overlays and permissions of Graphite's own projects
++# (vendor/graphite, synced through Graphite's local manifest).
++$(call inherit-product-if-exists, vendor/graphite/config/common.mk)

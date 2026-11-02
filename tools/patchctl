@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Convenience wrapper: tools/patchctl <subcommand> ... (see --help)
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+source "$ROOT/tools/lib/common.sh"
+exec python3 -I "$ROOT/tools/graphite/patchctl.py" "$@"

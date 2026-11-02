@@ -1,0 +1,162 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 20:21:40 +0100
+Subject: [PATCH] Power menu: open Classic Power Menu, system dialog as
+ fallback
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../GlobalActionsDialogLite.java              |  10 ++
+ .../globalactions/GraphitePowerMenu.kt        | 122 ++++++++++++++++++
+ 2 files changed, 132 insertions(+)
+ create mode 100644 packages/SystemUI/src/com/android/systemui/globalactions/GraphitePowerMenu.kt
+
+diff --git a/packages/SystemUI/src/com/android/systemui/globalactions/GlobalActionsDialogLite.java b/packages/SystemUI/src/com/android/systemui/globalactions/GlobalActionsDialogLite.java
+index 784f6ad534510d3e1ff45ed83d976fc7a5374924..889cd7e319e92f4cb70b0fd46e15a254badf038b 100644
+--- a/packages/SystemUI/src/com/android/systemui/globalactions/GlobalActionsDialogLite.java
++++ b/packages/SystemUI/src/com/android/systemui/globalactions/GlobalActionsDialogLite.java
+@@ -601,6 +601,16 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
+     }
+ 
+     private void handleShow(@Nullable Expandable expandable, int displayId) {
++        // Graphite: Classic Power Menu comes first. This dialog is what remains if it can't open.
++        GraphitePowerMenu.show(mContext, mMainHandler, mDeviceProvisioned, displayId,
++                () -> {
++                    mWindowManagerFuncs.onGlobalActionsShown();
++                    mWindowManagerFuncs.onGlobalActionsHidden();
++                },
++                () -> showSystemDialog(expandable, displayId));
++    }
++
++    private void showSystemDialog(@Nullable Expandable expandable, int displayId) {
+         SystemUIDialog dialog = createDialog(displayId);
+         prepareDialog();
+ 
+diff --git a/packages/SystemUI/src/com/android/systemui/globalactions/GraphitePowerMenu.kt b/packages/SystemUI/src/com/android/systemui/globalactions/GraphitePowerMenu.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..3a2e9bb980f9ca47a2b24723214012d91ba56412
+--- /dev/null
++++ b/packages/SystemUI/src/com/android/systemui/globalactions/GraphitePowerMenu.kt
+@@ -0,0 +1,122 @@
++/*
++ * Copyright (C) 2026 Graphite
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.systemui.globalactions
++
++import android.app.ActivityManager
++import android.app.ActivityOptions
++import android.content.ActivityNotFoundException
++import android.content.ComponentName
++import android.content.Context
++import android.content.Intent
++import android.os.Bundle
++import android.os.Handler
++import android.os.Parcel
++import android.os.ResultReceiver
++import android.os.UserHandle
++import android.os.UserManager
++import android.provider.Settings
++import android.util.Log
++
++/**
++ * Graphite: opens Classic Power Menu. The app confirms through [EXTRA_ACK]. Anything else calls
++ * [fallback], so holding power always shows a menu: the app missing, disabled or crashing, setup not
++ * finished, or storage still locked after a reboot.
++ */
++object GraphitePowerMenu {
++    private const val TAG = "GraphitePowerMenu"
++    private const val SETTING = "graphite_classic_power_menu"
++    private const val EXTRA_ACK = "org.graphite.extra.POWER_MENU_ACK"
++    private const val ACK_TIMEOUT_MS = 2000L
++    private val COMPONENT =
++        ComponentName(
++            "com.kieronquinn.app.classicpowermenu",
++            "com.kieronquinn.app.classicpowermenu.ui.activities.PowerMenuActivity",
++        )
++
++    // Sent as a plain ResultReceiver, because the app can't load a SystemUI subclass
++    private fun plainReceiver(receiver: ResultReceiver): ResultReceiver {
++        val parcel = Parcel.obtain()
++        try {
++            receiver.writeToParcel(parcel, 0)
++            parcel.setDataPosition(0)
++            return ResultReceiver.CREATOR.createFromParcel(parcel)
++        } finally {
++            parcel.recycle()
++        }
++    }
++
++    @JvmStatic
++    fun show(
++        context: Context,
++        handler: Handler,
++        provisioned: Boolean,
++        displayId: Int,
++        shown: Runnable,
++        fallback: Runnable,
++    ) {
++        val user = ActivityManager.getCurrentUser()
++        val enabled =
++            Settings.Secure.getIntForUser(context.contentResolver, SETTING, 1, user) != 0
++        if (
++            !enabled ||
++                !provisioned ||
++                !context.getSystemService(UserManager::class.java)!!.isUserUnlocked(user)
++        ) {
++            fallback.run()
++            return
++        }
++        var answered = false
++        val timeout = Runnable {
++            if (answered) return@Runnable
++            answered = true
++            Log.w(TAG, "Classic Power Menu didn't open in time")
++            fallback.run()
++        }
++        val ack =
++            object : ResultReceiver(handler) {
++                override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
++                    if (answered) return
++                    answered = true
++                    handler.removeCallbacks(timeout)
++                    shown.run()
++                }
++            }
++        val intent =
++            Intent()
++                .setComponent(COMPONENT)
++                .addFlags(
++                    Intent.FLAG_ACTIVITY_NEW_TASK or
++                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
++                        Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS or
++                        Intent.FLAG_ACTIVITY_NO_ANIMATION or
++                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
++                )
++                .putExtra(EXTRA_ACK, plainReceiver(ack))
++        val options = ActivityOptions.makeBasic().setLaunchDisplayId(displayId).toBundle()
++        try {
++            context.startActivityAsUser(intent, options, UserHandle.of(user))
++            handler.postDelayed(timeout, ACK_TIMEOUT_MS)
++        } catch (e: ActivityNotFoundException) {
++            answered = true
++            fallback.run()
++        } catch (e: SecurityException) {
++            Log.w(TAG, "Could not open Classic Power Menu", e)
++            answered = true
++            fallback.run()
++        }
++    }
++}

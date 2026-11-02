@@ -1,0 +1,142 @@
+diff --git a/src/com/android/launcher3/util/DisplayController.java b/src/com/android/launcher3/util/DisplayController.java
+index ab9ede6809..029b8287e0 100644
+--- a/src/com/android/launcher3/util/DisplayController.java
++++ b/src/com/android/launcher3/util/DisplayController.java
+@@ -15,6 +15,8 @@
+  */
+ package com.android.launcher3.util;
+ 
++import static android.content.res.Configuration.UI_MODE_NIGHT_MASK;
++import static android.content.res.Configuration.UI_MODE_NIGHT_YES;
+ import static android.view.Display.DEFAULT_DISPLAY;
+ import static android.view.WindowManager.LayoutParams.TYPE_APPLICATION;
+ 
+@@ -26,6 +28,7 @@ import static com.android.launcher3.InvariantDeviceProfile.TYPE_TABLET;
+ import static com.android.launcher3.LauncherPrefs.TASKBAR_PINNING;
+ import static com.android.launcher3.LauncherPrefs.TASKBAR_PINNING_IN_DESKTOP_MODE;
+ import static com.android.launcher3.LauncherPrefs.TASKBAR_PINNING_KEY;
++import static com.android.launcher3.Utilities.ATLEAST_S;
+ import static com.android.launcher3.Utilities.dpiFromPx;
+ import static com.android.launcher3.config.FeatureFlags.enableTaskbarPinning;
+ import static com.android.launcher3.util.Executors.MAIN_EXECUTOR;
+@@ -53,6 +56,7 @@ import androidx.annotation.Nullable;
+ import androidx.annotation.UiThread;
+ import androidx.annotation.VisibleForTesting;
+ 
++import app.lawnchair.util.LawnchairWindowManagerProxy;
+ import com.android.launcher3.InvariantDeviceProfile.DeviceType;
+ import com.android.launcher3.LauncherPrefChangeListener;
+ import com.android.launcher3.LauncherPrefs;
+@@ -343,11 +347,27 @@ public class DisplayController implements DesktopVisibilityListener {
+                 != info.showLockedTaskbarOnHome()
+                 || mWMProxy.showDesktopTaskbarForFreeformDisplay(windowContext)
+                 != info.showDesktopTaskbarForFreeformDisplay()
+-                || config.isNightModeActive() != info.mIsNightModeActive) {
++                || isNightModeActiveCompat(config) != info.mIsNightModeActive) {
+             notifyConfigChange(displayId);
+         }
+     }
+ 
++    /** 
++     * LC-Note: Returns whether the configuration is in night mode
++     * <p> 
++     * Compat <code>API 30</code> and higher: <code>config.isNightModeActive()</code>
++     * <p> 
++     * Compat <code>API 29</code> and lower: <code>(config.uiMode & UI_MODE_NIGHT_MASK) == UI_MODE_NIGHT_YES</code>
++     * 
++     * @return true if night mode is active and false otherwise
++     */
++    private static boolean isNightModeActiveCompat(Configuration config) {
++        if (Utilities.ATLEAST_R) {
++            return config.isNightModeActive();
++        }
++        return (config.uiMode & UI_MODE_NIGHT_MASK) == UI_MODE_NIGHT_YES;
++    }
++
+     public void setPriorityListener(DisplayInfoChangeListener listener) {
+         mPriorityListener = listener;
+     }
+@@ -486,7 +506,12 @@ public class DisplayController implements DesktopVisibilityListener {
+                     String.format("getOrCreatePerDisplayInfo - no cached value found for %d",
+                             displayId));
+         }
+-        Context windowContext = mAppContext.createWindowContext(display, TYPE_APPLICATION, null);
++        Context windowContext;
++        if (ATLEAST_S) {
++            windowContext = mAppContext.createWindowContext(display, TYPE_APPLICATION, null);
++        } else {
++            windowContext = mAppContext.createDisplayContext(display);
++        }
+         Info info = new Info(windowContext, mIsDesktopFormFactor, mWMProxy,
+                 mWMProxy.estimateInternalDisplayBounds(windowContext),
+                 DisplayMetrics.DENSITY_DEVICE_STABLE);
+@@ -541,6 +566,9 @@ public class DisplayController implements DesktopVisibilityListener {
+ 
+         private final boolean mIsNightModeActive;
+ 
++        private boolean mIsFoldable;
++        private boolean mDeviceTypeLogged;
++
+         public Info(Context displayInfoContext) {
+             /* don't need system overrides for external displays */
+             this(displayInfoContext, enableScalabilityForDesktopExperience()
+@@ -568,8 +596,11 @@ public class DisplayController implements DesktopVisibilityListener {
+             mStableDensityScaleFactor = (float) defaultDensityDpi / DisplayMetrics.DENSITY_DEFAULT;
+             mScreenSizeDp = new PortraitSize(config.screenHeightDp, config.screenWidthDp);
+             navigationMode = wmProxy.getNavigationMode(displayInfoContext);
+-            mIsNightModeActive = config.isNightModeActive();
++            mIsNightModeActive = isNightModeActiveCompat(config);
+ 
++            // LC-Note: the single "does this device fold" check (LawnchairWindowManagerProxy).
++            mIsFoldable = LawnchairWindowManagerProxy.isFoldable(displayInfoContext);
++            
+             mPerDisplayBounds.putAll(perDisplayBoundsCache);
+             List<WindowBounds> cachedValue = getCurrentBounds();
+ 
+@@ -710,6 +741,7 @@ public class DisplayController implements DesktopVisibilityListener {
+ 
+         public @DeviceType int getDeviceType() {
+             if (mIsDesktopFormFactor) {
++                logDeviceType("Device has desktop profile (Desktop)");
+                 return TYPE_DESKTOP;
+             }
+ 
+@@ -719,16 +751,36 @@ public class DisplayController implements DesktopVisibilityListener {
+             int type = supportedBounds.stream()
+                     .mapToInt(bounds -> isTablet(bounds) ? flagTablet : flagPhone)
+                     .reduce(0, (a, b) -> a | b);
++
+             if (type == (flagPhone | flagTablet)) {
+-                // device has profiles supporting both phone and tablet modes
++                logDeviceType("Device has multiple display (Phone|Tablet) based on bounds");
+                 return TYPE_MULTI_DISPLAY;
+-            } else if (type == flagTablet) {
++            }
++            if (type == flagTablet) {
++                // LC: Hacky stuff but it work!
++                if (mIsFoldable) {
++                    logDeviceType("Device is Foldable (Tablet && Hinge Detected)");
++                    return TYPE_MULTI_DISPLAY;
++                }
++                logDeviceType("Device has tablet profile (Tablet)");
+                 return TYPE_TABLET;
+             } else {
++                logDeviceType("Device has phone profile (Phone)");
+                 return TYPE_PHONE;
+             }
+         }
+ 
++        /**
++         * LC-Note: getDeviceType() is called many times for each display change (once per
++         * DeviceProfile and more), so only log it the first time.
++         */
++        private void logDeviceType(String message) {
++            if (!mDeviceTypeLogged) {
++                mDeviceTypeLogged = true;
++                Log.d("LC-DisplayController", message + ", currentSize=" + currentSize);
++            }
++        }
++
+         /**
+          * Returns whether the taskbar is forced to be pinned when home is visible.
+          */
