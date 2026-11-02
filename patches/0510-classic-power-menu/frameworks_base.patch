@@ -6,16 +6,24 @@ Subject: [PATCH] Power menu: open Classic Power Menu, system dialog as
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- .../GlobalActionsDialogLite.java              |  10 ++
- .../globalactions/GraphitePowerMenu.kt        | 122 ++++++++++++++++++
- 2 files changed, 132 insertions(+)
+ .../GlobalActionsDialogLite.java              |  11 ++
+ .../globalactions/GraphitePowerMenu.kt        | 178 ++++++++++++++++++
+ 2 files changed, 189 insertions(+)
  create mode 100644 packages/SystemUI/src/com/android/systemui/globalactions/GraphitePowerMenu.kt
 
 diff --git a/packages/SystemUI/src/com/android/systemui/globalactions/GlobalActionsDialogLite.java b/packages/SystemUI/src/com/android/systemui/globalactions/GlobalActionsDialogLite.java
-index 784f6ad534510d3e1ff45ed83d976fc7a5374924..889cd7e319e92f4cb70b0fd46e15a254badf038b 100644
+index 784f6ad534510d3e1ff45ed83d976fc7a5374924..b73b8f540306214b63856126d9d82d434cd3385d 100644
 --- a/packages/SystemUI/src/com/android/systemui/globalactions/GlobalActionsDialogLite.java
 +++ b/packages/SystemUI/src/com/android/systemui/globalactions/GlobalActionsDialogLite.java
-@@ -601,6 +601,16 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
+@@ -445,6 +445,7 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
+         mBackgroundExecutor = backgroundExecutor;
+         mRingerModeTracker = ringerModeTracker;
+         mMainHandler = handler;
++        GraphitePowerMenu.keepWarm(context, handler);
+         mSmallestScreenWidthDp = resources.getConfiguration().smallestScreenWidthDp;
+         mOrientation = resources.getConfiguration().orientation;
+         mShadeController = shadeController;
+@@ -601,6 +602,16 @@ public class GlobalActionsDialogLite implements DialogInterface.OnDismissListene
      }
  
      private void handleShow(@Nullable Expandable expandable, int displayId) {
@@ -34,10 +42,10 @@ index 784f6ad534510d3e1ff45ed83d976fc7a5374924..889cd7e319e92f4cb70b0fd46e15a254
  
 diff --git a/packages/SystemUI/src/com/android/systemui/globalactions/GraphitePowerMenu.kt b/packages/SystemUI/src/com/android/systemui/globalactions/GraphitePowerMenu.kt
 new file mode 100644
-index 0000000000000000000000000000000000000000..3a2e9bb980f9ca47a2b24723214012d91ba56412
+index 0000000000000000000000000000000000000000..96b0c4db78eafb28455730e53372a7b5d680b7f2
 --- /dev/null
 +++ b/packages/SystemUI/src/com/android/systemui/globalactions/GraphitePowerMenu.kt
-@@ -0,0 +1,122 @@
+@@ -0,0 +1,178 @@
 +/*
 + * Copyright (C) 2026 Graphite
 + *
@@ -59,11 +67,15 @@ index 0000000000000000000000000000000000000000..3a2e9bb980f9ca47a2b24723214012d9
 +import android.app.ActivityManager
 +import android.app.ActivityOptions
 +import android.content.ActivityNotFoundException
++import android.content.BroadcastReceiver
 +import android.content.ComponentName
 +import android.content.Context
 +import android.content.Intent
++import android.content.IntentFilter
++import android.content.ServiceConnection
 +import android.os.Bundle
 +import android.os.Handler
++import android.os.IBinder
 +import android.os.Parcel
 +import android.os.ResultReceiver
 +import android.os.UserHandle
@@ -81,11 +93,63 @@ index 0000000000000000000000000000000000000000..3a2e9bb980f9ca47a2b24723214012d9
 +    private const val SETTING = "graphite_classic_power_menu"
 +    private const val EXTRA_ACK = "org.graphite.extra.POWER_MENU_ACK"
 +    private const val ACK_TIMEOUT_MS = 2000L
++    private val WARM_SERVICE =
++        ComponentName(
++            "com.kieronquinn.app.classicpowermenu",
++            "com.kieronquinn.app.classicpowermenu.service.GraphiteWarmService",
++        )
 +    private val COMPONENT =
 +        ComponentName(
 +            "com.kieronquinn.app.classicpowermenu",
 +            "com.kieronquinn.app.classicpowermenu.ui.activities.PowerMenuActivity",
 +        )
++
++    /**
++     * Keeps the app's process running while the user is unlocked, so the menu opens at once and
++     * its cards stay cached. Binding fails harmlessly if the app is missing.
++     */
++    @JvmStatic
++    fun keepWarm(context: Context, handler: Handler) {
++        val connection =
++            object : ServiceConnection {
++                override fun onServiceConnected(name: ComponentName, service: IBinder) {}
++
++                override fun onServiceDisconnected(name: ComponentName) {}
++            }
++        var bound = false
++        val bind = {
++            val user = ActivityManager.getCurrentUser()
++            val unlocked = context.getSystemService(UserManager::class.java)!!.isUserUnlocked(user)
++            if (!bound && unlocked) {
++                bound =
++                    context.bindServiceAsUser(
++                        Intent().setComponent(WARM_SERVICE),
++                        connection,
++                        Context.BIND_AUTO_CREATE,
++                        UserHandle.of(user),
++                    )
++            } else if (bound && !unlocked) {
++                context.unbindService(connection)
++                bound = false
++            }
++        }
++        context.registerReceiver(
++            object : BroadcastReceiver() {
++                override fun onReceive(context: Context, intent: Intent) {
++                    if (bound) {
++                        context.unbindService(connection)
++                        bound = false
++                    }
++                    bind()
++                }
++            },
++            IntentFilter(Intent.ACTION_USER_UNLOCKED).apply { addAction(Intent.ACTION_USER_SWITCHED) },
++            null,
++            handler,
++            Context.RECEIVER_EXPORTED,
++        )
++        handler.post { bind() }
++    }
 +
 +    // Sent as a plain ResultReceiver, because the app can't load a SystemUI subclass
 +    private fun plainReceiver(receiver: ResultReceiver): ResultReceiver {

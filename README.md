@@ -179,10 +179,20 @@ Everything is tracked on GitHub under `bjakra`. Keep them up to date when a chan
 | `graphite` | Tooling, patches, docs | this directory |
 | `graphite_vendor` | Overlays, prebuilts, product config, test wallet. Contains Google's clock APKs, so it stays private | `src/vendor/graphite` |
 | `graphite_parts`, `graphite_weather` | Graphite's settings and weather apps | `src/packages/apps/` |
-| `lawnchair` (`graphite-a17-merge`), `Smartspacer` (`graphite`), `ClassicPowerMenu` (`graphite`), `PixelishSearch` (`graphite`) | App forks | `apps/` |
+| `lawnchair` (`graphite-a17-merge`), `Smartspacer` (`graphite`), `ClassicPowerMenu` (`graphite`) | App forks | `apps/` |
 
 `build.sh` still syncs Graphite's own repos from the local copies in `projects/`.
 
 `vendor/graphite/tests/WalletTestCards` is a test app that never ships. It has made-up Quick Access Wallet cards and a
 `FLAG_SECURE` screen. Install it on the emulator with `adb install`, then run
 `adb shell settings put secure nfc_payment_default_component org.graphite.wallettest/.TestPaymentService`.
+
+## Kernel
+
+The Pixel 8 kernel lives in `kernel/pixel` (GrapheneOS `kernel_pixel_6.1`, branch `17`) and adds KernelSU-Next v3.4.2 through
+`patches-kernel/`. `tools/kernel/build-husky.sh` builds it and installs the result in `device/google/shusky-kernels`. A repo
+sync of that project restores GrapheneOS's kernel, so run `tools/kernel/build-husky.sh --install-only` again after one. All
+modules come from the same build, because forced module signing and struct randomisation tie modules to their kernel build.
+
+SUSFS isn't integrated yet. `tools/kernel/apply-kernelsu.sh` leaves out KernelSU-Next's `kernel/susfs` directory, and nothing else
+in the kernel depends on it, so it can be added later.

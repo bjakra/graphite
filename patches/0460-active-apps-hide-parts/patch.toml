@@ -1,8 +1,8 @@
-title = "SystemUI: don't list Graphite's system app under active apps"
+title = "SystemUI: don't list the ROM's own apps under active apps"
 description = """
-Hides org.graphite.parts from the active apps list (FgsManagerController). Its only foreground service is
-Caffeine, which has a notification with a stop action, so it stays visible and stoppable. Applies to this one
-package only.
+Hides Graphite's own apps from the active apps list (FgsManagerController): Parts, Weather, Lawnchair, Classic Power
+Menu, Smartspacer and the KernelSU-Next manager. They can no longer be stopped from that list. Parts' only foreground
+service is Caffeine, which keeps its own notification with a stop action. Applies to these packages only.
 """
 # false = the ROM still builds and works without it; build.sh may skip it on failure
 required = false

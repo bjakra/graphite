@@ -26,7 +26,7 @@ Guiding principles, which keep `./update.sh` cheap every month:
   Google-independent (see §2).
 * **Forks** live on GitHub user `bjakra` so they can be published:
   `bjakra/lawnchair` (fresh fork of LawnchairLauncher/lawnchair; work branch `graphite`, created from
-  upstream `16-dev` @ 849fec9), `bjakra/PixelishSearch`, `bjakra/Smartspacer`, `bjakra/KernelSU-Next`.
+  upstream `16-dev` @ 849fec9), `bjakra/Smartspacer`, `bjakra/KernelSU-Next`.
   The old 2024 lawnchair fork was deleted; a backup is in `state/backups/lawnchair-old-fork-2024.bundle`.
   susfs4ksu and GrapheneOS's kernel live on GitLab (no `gh` fork). Their changes are kept as patches.
 
@@ -48,6 +48,7 @@ Guiding principles, which keep `./update.sh` cheap every month:
 * **Bootloader stays *locked* (decided).** The kernel is part of our AVB-signed boot image, so
   Graphite can relock with our own key (`fastboot flash avb_custom_key avb_pkmd.bin`). The result is root
   plus full verified boot and the GrapheneOS update security model, which most rooted ROMs can't offer.
+* Status: KernelSU-Next v3.4.2 is built in and the manager preinstalled. SUSFS is deferred, and the kernel stays ready for it.
 * Preinstall the KernelSU-Next manager as a system app. Root is granted per app in the manager, and
   the default is "nobody". Optionally ship a default SUSFS config (hide mounts/props, spoof uname).
 * Defaults for "best hiding" belong in a small KernelSU module bundled with the manager
@@ -71,7 +72,7 @@ Guiding principles, which keep `./update.sh` cheap every month:
   redistributed**. Use **Smartspacer** (open source) preinstalled and enabled, with Lawnchair's
   smartspace provider set to Smartspacer and a toggle to hide it. As a privileged system app,
   Smartspacer gets its permissions without Shizuku.
-* Search bar: **fork of PixelishSearch** (Pixel Launcher-style unified search, Kotlin/Compose, MIT):
+* Search bar: Lawnchair's own search, restyled like PixelishSearch. The original plan, a **fork of PixelishSearch** (Pixel Launcher-style unified search, Kotlin/Compose, MIT):
   * Web search goes through `Intent.ACTION_WEB_SEARCH` to the **default browser**, so Vanadium
     uses its own configured default search engine. No hard-coded Google.
   * Suggestions use a configurable provider (none / DuckDuckGo / Startpage / Brave / …)
@@ -144,7 +145,5 @@ Ordered by value / effort:
 
 ## Status (2026-11-02)
 
-Search fork: done on branch `graphite` in `apps/PixelishSearch`, not pushed to `bjakra/PixelishSearch`
-yet. Startpage was left out of the suggestion providers because its endpoint returned nothing when
-tested. Vanadium's ACTION_WEB_SEARCH prefills its search box and waits for Enter, so a web search takes
-a second Enter. Voice search was removed along with the Gemini button.
+Search: the PixelishSearch fork was dropped in favour of Lawnchair's own search, restyled to match it, and deleted.
+
