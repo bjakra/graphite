@@ -45,14 +45,18 @@ apk="$N/build/out-release.apk"
 pkg=$("$BT/aapt2" dump packagename "$apk")
 
 # The rebuilt APK still carries the native libraries of every other Android System Intelligence feature (205 MB).
-# Recognition only loads these three, the same set Kieron Quinn ships for x86_64, so everything else is dropped:
+# Recognition only loads these three of Google's, the same set Kieron Quinn ships for x86_64, so Google's others are
+# dropped (the overlay's own libraries, like Pine, stay):
 # the ROM gets arm64 only (small enough for the vendor repo), the emulator copy also keeps x86_64 (local only).
 # GitHub refuses files over 100 MiB, so the ROM copy must stay below that.
 trim() { # trim IN OUT ABI...
-    python3 - "$@" <<'PY'
+    python3 - "$N/base.apk" "$@" <<'PY'
 import sys, zipfile
-src, dst, abis = sys.argv[1], sys.argv[2], sys.argv[3:]
+base, src, dst, abis = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
 keep = {"libsense.so", "libsense_nnfp_v3.so", "libmodeleditor-jni.so"}
+# Libraries the overlay adds itself (Pine hooking etc.) are not Google's and always stay
+with zipfile.ZipFile(base) as zbase:
+    google = {n.rsplit("/", 1)[1] for n in zbase.namelist() if n.startswith("lib/")}
 with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w") as zout:
     for info in zin.infolist():
         name = info.filename
@@ -60,13 +64,13 @@ with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w") as zout:
             continue
         if name.startswith("lib/"):
             _, abi, lib = name.split("/", 2)
-            if abi not in abis or lib not in keep:
+            if abi not in abis or not lib.endswith(".so") or (lib in google and lib not in keep):
                 continue
         # dex compressed for the repo copy: Soong stores dex uncompressed again for privileged apps
         compress = zipfile.ZIP_DEFLATED if name.endswith(".dex") else info.compress_type
         zout.writestr(info, zin.read(info), compress_type=compress, compresslevel=9)
 PY
-    "$BT/zipalign" -f -p 4 "$2" "$2.aligned"
+    "$BT/zipalign" -f -P 16 4 "$2" "$2.aligned"  # 16 KB page aligned .so, loaded straight from the APK
     "$BT/apksigner" sign --ks "$HOME/.android/debug.keystore" --ks-key-alias androiddebugkey \
         --ks-pass pass:android --key-pass pass:android --out "$2" "$2.aligned" 2>/dev/null
     rm -f "$2.aligned" "$2.idsig"
