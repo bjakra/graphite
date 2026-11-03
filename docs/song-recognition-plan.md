@@ -172,6 +172,8 @@ In progress / next:
 * GraphiteParts: recognise-now dialog, music database page, pause at night (built, to test), country pickers.
 * Remove AMM's screens from the core once every page exists (backup & restore, track list, lock screen options).
 * Lock screen song line (SystemUI), At a Glance card (Lawnchair), Quick Settings tile, setup page.
-* SystemUI: hide the mic indicator and active-apps entry for the core and engine while Now Playing is on.
+* Mic indicator: none needed. The core records with the hotword source, so only RECORD_AUDIO_HOTWORD is active, which
+  SystemUI's privacy indicator doesn't show (checked on the emulator during a recognition), like Now Playing on a
+  Pixel. Active apps: core and engine added to patch 0460's list (done).
 * ROM packaging: core (priv-app, privapp permissions, default permissions RECORD_AUDIO/POST_NOTIFICATIONS for core and
   engine, READ_PHONE_STATE for engine, power-save allowlist), downloader, engine; newest manifest as default at build.
