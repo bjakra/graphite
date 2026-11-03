@@ -135,7 +135,10 @@ and save it as `apps/NowPlaying/base.apk`. The x86_64 build of the same version 
 * `extractNativeLibs=false` and 16 KB alignment: a preinstalled app has no extracted lib folder.
 * Engine binder shell commands (`cmd jobscheduler run`) only work from ADB: replaced by the engine's
   ExpediteJobsReceiver, which reschedules its own jobs.
-* **Open (x86_64 emulator only):** the engine aborts ~20 s after start in ART's userfaultfd GC ("mremap to move pages
+* Hook libraries: public forks github.com/bjakra/LSPlant and github.com/bjakra/hook (branch `graphite`, needed for the
+  arm64 ROM); the emulator-only Dobby fix lives in private repos bjakra/dobby-graphite and bjakra/dobby-android-graphite.
+  `tools/apps/build-hooks.sh` builds them in order into `~/.m2`, using the private Dobby only when it is checked out.
+* **Fixed (x86_64 emulator only):** the engine aborted ~20 s after start in ART's userfaultfd GC ("mremap to move pages
   failed: Bad address"). Cause: Dobby (AliuHook's inline hooker) on x86_64 puts the address table for its
   `jmp [rip+x]` hooks in a page within 2 GB of libart, which lands inside ART's LinearAlloc reservation; ART then can't
   move that region. `dobby_disable_near_branch_trampoline()` does not help on x64. On arm64 Dobby inlines the address
