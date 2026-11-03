@@ -73,7 +73,7 @@ Rule: same behaviour as AMM; where something changes, the reason is written here
 
 | ShizukuService method | Graphite core (same process, platform signed priv-app) |
 |---|---|
-| AudioRecord_* (AudioRecord built with a shell context) | Same calls, built with the core's own context; needs `RECORD_AUDIO` and `CAPTURE_AUDIO_HOTWORD`. Attribution is the core instead of Shell |
+| AudioRecord_* (AudioRecord built with a shell context) | Same calls, built with the core's own context; needs `RECORD_AUDIO` and `CAPTURE_AUDIO_HOTWORD`. Attribution is the core instead of Shell. Background recording needs the core's foreground service to be of type microphone (started at boot through the `START_ACTIVITIES_FROM_BACKGROUND` exemption); shell was exempt |
 | isCompatible, isRoot, ping | true, false, true: the core always has the permissions, never root |
 | MusicRecognitionManager_* | Only used by On Demand, which is not ported (sends audio to Google) |
 | is/add/removeMicrophoneDisabledListener | Same SensorPrivacyManager calls; `OBSERVE_SENSOR_PRIVACY` |
@@ -81,7 +81,7 @@ Rule: same behaviour as AMM; where something changes, the reason is written here
 | dismissKeyguard | Same IWindowManager call; `CONTROL_KEYGUARD` |
 | setOwnerInfo | Root only in AMM, so a no-op there without root; replaced by the native lock screen line |
 | forceStopNowPlaying (`am force-stop`) | `ActivityManager.forceStopPackage`, the API `am force-stop` calls; `FORCE_STOP_PACKAGES` |
-| expediteJobs (`cmd jobscheduler run [-f]`) | The same shell command sent to the jobscheduler binder (`IBinder.shellCommand`), allowed with `CHANGE_APP_IDLE_STATE` |
+| expediteJobs (`cmd jobscheduler run [-f]`) | Android only accepts that command from ADB, so the engine reschedules its own jobs (ExpediteJobsReceiver): without delay and with conditions, or without conditions when forced |
 | onCreate: grant notification / restricted-settings permissions | Granted by the ROM's default permissions instead |
 | destroy | Not needed: nothing to tear down outside the core's own process |
 
