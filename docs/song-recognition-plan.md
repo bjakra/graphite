@@ -43,10 +43,15 @@ and integrate them into the system", in a dedicated Now Playing page in Graphite
   screens of its own, platform signed. It only does recognition (Google's model, on device) and stores the database.
 * **Graphite Now Playing, in GraphiteParts:** the recognition service, scheduling, history database, the settings page,
   the Quick Settings tile, database updates, and the data the lock screen and At a Glance show.
-* **Network:** the engine declares `INTERNET`, which on GrapheneOS is a runtime permission. It stays revoked. Only a
-  database update (button or schedule, both chosen by the user) grants it, and it is revoked again when the download
-  ends or fails. GraphiteParts itself gets no network. Recognition never has network. On Demand recognition (which
-  sends audio to Google) is not ported.
+* **Network:** the engine never opens connections itself; all of its HTTP goes through the Astrea service (Google's open
+  source Private Compute Services, Apache 2.0), which Ambient Music Mod hosted. In Graphite the engine has no
+  `INTERNET` permission at all, and Astrea is hosted by a tiny separate app, `org.graphite.musicdb`, the only part that
+  declares `INTERNET`. On GrapheneOS that is a runtime permission: it stays revoked, and only a database update (button
+  or schedule, both chosen by the user) grants it until the download ends or fails. Astrea also refuses requests
+  outside an update. GraphiteParts itself gets no network. On Demand recognition (sends audio to Google) is not ported.
+* **Engine build:** `tools/apps/build-nowplaying.sh` (fork bjakra/NowPlaying, branch graphite). The rebuilt APK keeps
+  only the three native libraries recognition loads, arm64 only for the ROM (83 MiB, below GitHub's 100 MiB limit),
+  and is committed to the vendor repo as `GraphiteNowPlayingEngine`.
 * **Database in the ROM:** the build host downloads the current database before a release, so a fresh install works
   offline. Automatic updates are off by default.
 * **Privacy indicator:** SystemUI patch hiding the microphone indicator and the active-apps entry for the engine and

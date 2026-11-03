@@ -43,6 +43,36 @@ apk="$N/build/out-release.apk"
 [[ -f $apk ]] || apk=$(ls -t "$N"/build/*.apk | head -n1)
 [[ -f $apk ]] || { echo "no Now Playing APK found"; exit 1; }
 pkg=$("$BT/aapt2" dump packagename "$apk")
+
+# The rebuilt APK still carries the native libraries of every other Android System Intelligence feature (205 MB).
+# Recognition only loads these three, the same set Kieron Quinn ships for x86_64, so everything else is dropped:
+# the ROM gets arm64 only (small enough for the vendor repo), the emulator copy also keeps x86_64 (local only).
+# GitHub refuses files over 100 MiB, so the ROM copy must stay below that.
+trim() { # trim IN OUT ABI...
+    python3 - "$@" <<'PY'
+import sys, zipfile
+src, dst, abis = sys.argv[1], sys.argv[2], sys.argv[3:]
+keep = {"libsense.so", "libsense_nnfp_v3.so", "libmodeleditor-jni.so"}
+with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w") as zout:
+    for info in zin.infolist():
+        name = info.filename
+        if name.startswith("META-INF/"):
+            continue
+        if name.startswith("lib/"):
+            _, abi, lib = name.split("/", 2)
+            if abi not in abis or lib not in keep:
+                continue
+        # dex compressed for the repo copy: Soong stores dex uncompressed again for privileged apps
+        compress = zipfile.ZIP_DEFLATED if name.endswith(".dex") else info.compress_type
+        zout.writestr(info, zin.read(info), compress_type=compress, compresslevel=9)
+PY
+    "$BT/zipalign" -f -p 4 "$2" "$2.aligned"
+    "$BT/apksigner" sign --ks "$HOME/.android/debug.keystore" --ks-key-alias androiddebugkey \
+        --ks-pass pass:android --key-pass pass:android --out "$2" "$2.aligned" 2>/dev/null
+    rm -f "$2.aligned" "$2.idsig"
+}
 mkdir -p "$OUT"
-cp "$apk" "$OUT/NowPlaying.apk"
-echo "installed $apk ($pkg) → $OUT"
+trim "$apk" "$OUT/NowPlaying.apk" arm64-v8a
+trim "$apk" "$N/build/nowplaying-emu.apk" arm64-v8a x86_64
+ls -la "$OUT/NowPlaying.apk" "$N/build/nowplaying-emu.apk" | awk '{print $5, $9}'
+echo "installed $pkg → $OUT (emulator copy: $N/build/nowplaying-emu.apk)"
