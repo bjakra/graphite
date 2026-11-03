@@ -1,10 +1,12 @@
-title = "Let allowlisted privileged apps read the sensor privacy toggles"
+title = "Let Graphite Now Playing read the sensor privacy toggles"
 description = """
-RELAXES A PERMISSION (user decision 2026-11-03). OBSERVE_SENSOR_PRIVACY ("internal|role|installer") gets
-"|privileged", so a privileged app that is on the privapp-permissions allowlist can read whether the microphone or
-camera privacy toggle is on and get told when it changes. Only Graphite Now Playing (org.graphite.nowplaying) is
-allowlisted: like Ambient Music Mod, it skips recognitions while the microphone is off and says why. Reading only;
-changing the toggles still needs MANAGE_SENSOR_PRIVACY, which is unchanged.
+RELAXES A PERMISSION CHECK (user decision 2026-11-03). SensorPrivacyService.enforceObserveSensorPrivacyPermission
+also accepts the preinstalled system app org.graphite.nowplaying (MATCH_SYSTEM_ONLY, the same way it exempts
+SystemUI), so it can read whether the microphone or camera privacy toggle is on and get told when it changes: like
+Ambient Music Mod, it skips recognitions while the microphone is off and says why. Reading only; changing the toggles
+still needs MANAGE_SENSOR_PRIVACY. The patch first made OBSERVE_SENSOR_PRIVACY "|privileged" (first commit); the
+second commit reverts that, because every privileged app already requesting it (SystemUI, Shell, PermissionController)
+would have needed a privapp allowlist entry and a user build would not boot.
 """
 # false = the ROM still builds and works without it; build.sh may skip it on failure
 required = false

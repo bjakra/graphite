@@ -29,3 +29,59 @@ index d49a48f8d11b1bbecfdb94659af2eb131f901c57..240d83d708fc8380488c94ebf9e9b421
                  android:permissionFlags="allowedInPrivateComputeCore" />
  
      <!-- @SystemApi Permission that protects the {@link Intent#ACTION_REVIEW_ACCESSIBILITY_SERVICES}
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 23:29:35 +0100
+Subject: [PATCH] Sensor privacy: let Graphite Now Playing read the toggles,
+ permission unchanged
+
+Making OBSERVE_SENSOR_PRIVACY privileged meant every privileged app that
+already requests it (SystemUI, Shell, PermissionController) needed a
+privapp allowlist entry; a user build would refuse to boot without them.
+The permission keeps its protection level; instead the sensor privacy
+service accepts the preinstalled org.graphite.nowplaying for reading,
+the same way it exempts SystemUI.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ core/res/AndroidManifest.xml                             | 4 +---
+ .../server/sensorprivacy/SensorPrivacyService.java       | 9 +++++++++
+ 2 files changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/core/res/AndroidManifest.xml b/core/res/AndroidManifest.xml
+index 240d83d708fc8380488c94ebf9e9b421d669b21c..d49a48f8d11b1bbecfdb94659af2eb131f901c57 100644
+--- a/core/res/AndroidManifest.xml
++++ b/core/res/AndroidManifest.xml
+@@ -9206,11 +9206,9 @@
+                 android:protectionLevel="internal|role|installer" />
+ 
+     <!-- @SystemApi Allows sensor privacy changes to be observed.
+-         Graphite: also privileged, so an allowlisted privileged app (Graphite Now Playing) can read
+-         whether the microphone toggle is on. Read-only; changing it still needs MANAGE_SENSOR_PRIVACY.
+          @hide -->
+     <permission android:name="android.permission.OBSERVE_SENSOR_PRIVACY"
+-                android:protectionLevel="internal|role|installer|privileged"
++                android:protectionLevel="internal|role|installer"
+                 android:permissionFlags="allowedInPrivateComputeCore" />
+ 
+     <!-- @SystemApi Permission that protects the {@link Intent#ACTION_REVIEW_ACCESSIBILITY_SERVICES}
+diff --git a/services/core/java/com/android/server/sensorprivacy/SensorPrivacyService.java b/services/core/java/com/android/server/sensorprivacy/SensorPrivacyService.java
+index 792d8fff62b1479d298fa479cc5cdba0380783b9..ceb3fee1bde83464f8615876e9782d33c8d16199 100644
+--- a/services/core/java/com/android/server/sensorprivacy/SensorPrivacyService.java
++++ b/services/core/java/com/android/server/sensorprivacy/SensorPrivacyService.java
+@@ -1250,6 +1250,15 @@ public final class SensorPrivacyService extends SystemService {
+                 // b/221782106, possible race condition with role grant might bootloop device.
+                 return;
+             }
++            // Graphite: Graphite Now Playing (preinstalled system app only) may read whether the
++            // microphone toggle is on, like Ambient Music Mod did through the shell user. Reading
++            // only; changing it still needs MANAGE_SENSOR_PRIVACY.
++            int nowPlayingAppId = UserHandle.getAppId(mPackageManagerInternal
++                    .getPackageUid("org.graphite.nowplaying", MATCH_SYSTEM_ONLY,
++                            UserHandle.USER_SYSTEM));
++            if (nowPlayingAppId >= 0 && UserHandle.getCallingAppId() == nowPlayingAppId) {
++                return;
++            }
+             if (mContext.checkCallingOrSelfPermission(
+                     android.Manifest.permission.OBSERVE_SENSOR_PRIVACY) == PERMISSION_GRANTED) {
+                 return;
