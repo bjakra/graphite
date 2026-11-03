@@ -179,7 +179,15 @@ Everything is tracked on GitHub under `bjakra`. Keep them up to date when a chan
 | `graphite` | Tooling, patches, docs | this directory |
 | `graphite_vendor` | Overlays, prebuilts, product config, test wallet. Contains Google's clock APKs, so it stays private | `src/vendor/graphite` |
 | `graphite_parts`, `graphite_weather` | Graphite's settings and weather apps | `src/packages/apps/` |
-| `lawnchair` (`graphite-a17-merge`), `Smartspacer` (`graphite`), `ClassicPowerMenu` (`graphite`) | App forks | `apps/` |
+| `lawnchair` (`graphite-a17-merge`) | Launcher fork, shipped as a prebuilt in `graphite_vendor` | `apps/lawnchair-a17` |
+| `AmbientMusicMod` (`graphite`) | Headless Now Playing core (`org.graphite.nowplaying`) and the database downloader (`org.graphite.musicdb`). Built by `tools/apps/build-nowplaying-core.sh` | `apps/AmbientMusicMod` |
+| `NowPlaying` (`graphite`) | Now Playing engine (`com.kieronquinn.app.pixelambientmusic`) built around Google's recognition APK. Built by `tools/apps/build-nowplaying.sh` | `apps/NowPlaying` |
+| `LSPlant`, `hook` (`graphite`) | Hook libraries the engine needs on Android 17. Built in order by `tools/apps/build-hooks.sh` | `apps/hooks/` |
+| `dobby-android-graphite`, `dobby-graphite` (private) | Dobby with x86_64 inline jumps. Only the emulator build needs it (`-PgraphiteDobby`) | `apps/hooks/dobby-android` |
+| `Smartspacer`, `ClassicPowerMenu` (`graphite`) | Older forks. Their features are now built into Lawnchair and SystemUI patches, so they don't ship | `apps/` |
+
+The Now Playing design (privacy, network gating, database updates) is described in
+[docs/song-recognition-plan.md](docs/song-recognition-plan.md).
 
 `build.sh` still syncs Graphite's own repos from the local copies in `projects/`.
 
