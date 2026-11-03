@@ -35,18 +35,49 @@ Recommendation: A. It is what Ambient Music Mod and other ROMs use, and recognit
 
 ## How it is built (decided)
 
-* Two apps, both forks by Kieron Quinn: Ambient Music Mod (manager, GPL-3.0) and Now Playing (Android System
-  Intelligence rebuilt with apktool down to the music recognition part). Both are rebuilt with Graphite's platform key
-  and shipped in `system_ext/priv-app`, neither declares `INTERNET`, so the kernel blocks all network sockets for them.
-* AMM's privileged half (`ShizukuService`, the `IShellProxy` implementation) runs inside AMM itself instead of through
-  Shizuku: as a platform signed system app it has the permissions directly.
-* Recording goes through Android's own `MusicRecognitionManager`, with Now Playing set as
-  `config_defaultMusicRecognitionService` in Graphite's framework overlay.
-* Database: downloaded once on the build host (never on the phone), stored outside git (Google's files must not be
-  published), copied into the ROM, and copied into Now Playing's storage on first enable. New database only with an
-  OS update.
-* Privacy indicator: a SystemUI patch that hides the microphone indicator and the active-apps entry for these two
-  packages only while the Secure setting for the service is on. The patch says it relaxes a privacy indicator.
+No Ambient Music Mod app. Its features are rebuilt inside Graphite (user, 2026-11-03: "replicate all of its features
+and integrate them into the system", in a dedicated Now Playing page in Graphite settings).
+
+* **Engine (the only part that is not Graphite code):** Kieron Quinn's Now Playing, a rebuild of Google's Android
+  System Intelligence cut down to music recognition. Shipped headless in `system_ext/priv-app`: no launcher icon, no
+  screens of its own, platform signed. It only does recognition (Google's model, on device) and stores the database.
+* **Graphite Now Playing, in GraphiteParts:** the recognition service, scheduling, history database, the settings page,
+  the Quick Settings tile, database updates, and the data the lock screen and At a Glance show.
+* **Network:** the engine declares `INTERNET`, which on GrapheneOS is a runtime permission. It stays revoked. Only a
+  database update (button or schedule, both chosen by the user) grants it, and it is revoked again when the download
+  ends or fails. GraphiteParts itself gets no network. Recognition never has network. On Demand recognition (which
+  sends audio to Google) is not ported.
+* **Database in the ROM:** the build host downloads the current database before a release, so a fresh install works
+  offline. Automatic updates are off by default.
+* **Privacy indicator:** SystemUI patch hiding the microphone indicator and the active-apps entry for the engine and
+  GraphiteParts' recognition only while Now Playing is on. The patch says it relaxes a privacy indicator.
+
+### Ambient Music Mod features and where they go
+
+| AMM feature | Graphite |
+|---|---|
+| Enable Now Playing, setup | Switch at the top of the Now Playing page (off by default), optional page in setup |
+| Recognition period, adaptive period | "How often": list of intervals, adaptive switch |
+| Recognition buffer (recording length) | "Listening time" |
+| Trigger when screen is on | Switch |
+| Bedtime mode (start, end) | "Pause at night" with start and end time |
+| Recognise now | Button on the page, Quick Settings tile, At a Glance tap |
+| Lock screen overlay (style, position, colour, shadow, on-click action) | Native: song line on the lock screen drawn by SystemUI in its own style; on-tap action setting (history, search the song, nothing) |
+| Owner info on lock screen | Not needed, replaced by the native lock screen line |
+| Notification of recognised songs | Optional, silent notification like the Pixel's |
+| History, favourites, summary | History screen on the page: list, favourites, delete, most heard |
+| Track list (artists, tracks, track info) | "Songs in the database" screen with search |
+| Database country, extra countries | Country picker plus extra countries |
+| Automatic database updates | "Database updates": Update now, automatic Off / daily / weekly / monthly, Wi-Fi only, with a warning that only this download connects to Google's servers |
+| Database info | Version, date and track count on the page |
+| Backup and restore, periodic backup | Export and import of the history, optional periodic backup to a chosen folder |
+| Battery optimisation, Shizuku, accessibility setup | Not needed in a system component |
+| On Demand (online recognition) | Not ported: sends audio to Google |
+| Home screen widget | At a Glance card in Lawnchair plus the Quick Settings tile |
+| Microphone indicator | Hidden while enabled (SystemUI patch) |
+
+Code from Ambient Music Mod (GPL-3.0) may be ported into GraphiteParts where it saves work; GraphiteParts then has to be
+distributed under GPL-3.0, which fits an open source ROM.
 
 ## Manual step for the user
 
