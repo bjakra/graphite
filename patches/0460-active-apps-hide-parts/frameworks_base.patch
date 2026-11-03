@@ -42,3 +42,29 @@ index a5e1fa8463a8627992a6ca45f4b909b3e19ba4d7..4ad17b1c4e195b05b177f0aaf878a32d
 +        "app.lawnchair",
 +        "com.rifsxd.ksunext",
 +    )
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 21:24:12 +0100
+Subject: [PATCH] SystemUI: Now Playing apps are not listed under active apps
+
+Graphite Now Playing and its recognition engine run while song
+recognition is on; like the other Graphite apps they are left out of
+the active apps list (user request).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../src/com/android/systemui/qs/FgsManagerController.kt        | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/packages/SystemUI/src/com/android/systemui/qs/FgsManagerController.kt b/packages/SystemUI/src/com/android/systemui/qs/FgsManagerController.kt
+index 4ad17b1c4e195b05b177f0aaf878a32dbd8ac471..7f108c75f1e5e94abb3aafd381064cf8980bb450 100644
+--- a/packages/SystemUI/src/com/android/systemui/qs/FgsManagerController.kt
++++ b/packages/SystemUI/src/com/android/systemui/qs/FgsManagerController.kt
+@@ -959,4 +959,7 @@ private val GRAPHITE_SYSTEM_APPS =
+         "org.graphite.weather",
+         "app.lawnchair",
+         "com.rifsxd.ksunext",
++        // Now Playing: Graphite Now Playing and its recognition engine (only running while it's on)
++        "org.graphite.nowplaying",
++        "com.kieronquinn.app.pixelambientmusic",
+     )

@@ -1,12 +1,14 @@
 title = "SystemUI: don't list the ROM's own apps under active apps"
 description = """
-Hides Graphite's own apps from the active apps list (FgsManagerController): Parts, Weather, Lawnchair and the
-KernelSU-Next manager. They can no longer be stopped from that list. Parts' only foreground
-service is Caffeine, which keeps its own notification with a stop action. Applies to these packages only.
+Hides Graphite's own apps from the active apps list (FgsManagerController): Parts, Weather, Lawnchair, the
+KernelSU-Next manager, and Now Playing (org.graphite.nowplaying and its engine com.kieronquinn.app.pixelambientmusic,
+which run while song recognition is on; user request). They can no longer be stopped from that list. Parts' only
+foreground service is Caffeine, which keeps its own notification with a stop action; Now Playing is turned off in
+Graphite settings. Applies to these packages only.
 """
 # false = the ROM still builds and works without it; build.sh may skip it on failure
 required = false
-skip_impact = "Graphite appears under active apps while Caffeine is on."
+skip_impact = "Graphite appears under active apps while Caffeine is on, Now Playing whenever it is on."
 category = "feature"
 depends = []
 enabled = true
