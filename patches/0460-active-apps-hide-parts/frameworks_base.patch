@@ -9,11 +9,11 @@ with a stop action, so it doesn't need an entry in the active apps list.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 
 ---
- .../android/systemui/qs/FgsManagerController.kt | 17 +++++++++++++++++
- 1 file changed, 17 insertions(+)
+ .../android/systemui/qs/FgsManagerController.kt   | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
 
 diff --git a/packages/SystemUI/src/com/android/systemui/qs/FgsManagerController.kt b/packages/SystemUI/src/com/android/systemui/qs/FgsManagerController.kt
-index a5e1fa8463a8627992a6ca45f4b909b3e19ba4d7..57b3f7ef582fcdae017e21de9c636c5aecfbc4c9 100644
+index a5e1fa8463a8627992a6ca45f4b909b3e19ba4d7..4ad17b1c4e195b05b177f0aaf878a32dbd8ac471 100644
 --- a/packages/SystemUI/src/com/android/systemui/qs/FgsManagerController.kt
 +++ b/packages/SystemUI/src/com/android/systemui/qs/FgsManagerController.kt
 @@ -738,6 +738,13 @@ constructor(
@@ -30,7 +30,7 @@ index a5e1fa8463a8627992a6ca45f4b909b3e19ba4d7..57b3f7ef582fcdae017e21de9c636c5a
              uiControl =
                  when (backgroundRestrictionExemptionReason) {
                      PowerExemptionManager.REASON_SYSTEM_UID,
-@@ -945,3 +952,13 @@ constructor(
+@@ -945,3 +952,11 @@ constructor(
          }
      }
  }
@@ -40,7 +40,5 @@ index a5e1fa8463a8627992a6ca45f4b909b3e19ba4d7..57b3f7ef582fcdae017e21de9c636c5a
 +        "org.graphite.parts",
 +        "org.graphite.weather",
 +        "app.lawnchair",
-+        "com.kieronquinn.app.classicpowermenu",
-+        "com.kieronquinn.app.smartspacer",
 +        "com.rifsxd.ksunext",
 +    )

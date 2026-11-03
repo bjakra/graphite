@@ -1,0 +1,20 @@
+title = "Power menu: restart submenu and haptics"
+description = """
+With Secure graphite_power_menu_restart_submenu (default 1, a switch in Graphite power menu settings), Restart, Recovery,
+Bootloader and Restart SystemUI share one Restart button that opens a submenu, reusing the power options dialog. Every
+power menu tap gets a click haptic and every long press a long press haptic.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "Restart targets show as separate buttons and power menu taps have no haptics."
+category = "feature"
+depends = ["0410-power-menu-actions"]
+enabled = true
+notes = ""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0520-power-menu-restart-submenu --project <path> --new
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"

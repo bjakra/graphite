@@ -4,6 +4,7 @@ Date: Mon, 2 Nov 2026 18:54:11 +0100
 Subject: [PATCH] SystemUI: lock screen weather from Graphite Weather
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
 ---
  .../com/android/keyguard/GraphiteWeather.kt   | 95 +++++++++++++++++++
  .../keyguard/KeyguardUpdateMonitor.java       |  6 ++
@@ -136,6 +137,7 @@ Subject: [PATCH] SystemUI: don't send an empty weather reading
 It made the clock show 0 degrees while weather is off.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
 ---
  .../SystemUI/src/com/android/keyguard/GraphiteWeather.kt    | 6 +++---
  1 file changed, 3 insertions(+), 3 deletions(-)

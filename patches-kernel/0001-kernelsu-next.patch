@@ -1,4 +1,4 @@
-From 2d9544b51ff8845d0630cff9e00b47fb2a6b7abd Mon Sep 17 00:00:00 2001
+From a3e65f9d7f337a69adddeccc4a447ee89e9774a2 Mon Sep 17 00:00:00 2001
 From: Bjarne <87858321+bjakra@users.noreply.github.com>
 Date: Mon, 2 Nov 2026 22:30:55 +0100
 Subject: [PATCH] drivers: add KernelSU-Next v3.4.2
@@ -76,7 +76,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  drivers/kernelsu/manager/manager_identity.h  |   73 +
  drivers/kernelsu/manager/manager_observer.h  |   18 +
  drivers/kernelsu/manager/pkg_observer.c      |  160 +++
- drivers/kernelsu/manager/throne_tracker.c    |  415 ++++++
+ drivers/kernelsu/manager/throne_tracker.c    |  445 +++++++
  drivers/kernelsu/manager/throne_tracker.h    |   26 +
  drivers/kernelsu/policy/allowlist.c          |  645 +++++++++
  drivers/kernelsu/policy/allowlist.h          |   69 +
@@ -104,7 +104,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  drivers/kernelsu/supercall/supercall.c       |  287 ++++
  drivers/kernelsu/supercall/supercall.h       |   29 +
  drivers/kernelsu/tools/check_symbol.c        |  200 +++
- 99 files changed, 16537 insertions(+)
+ 99 files changed, 16567 insertions(+)
  create mode 100644 drivers/kernelsu/.clang-format
  create mode 100644 drivers/kernelsu/.gitignore
  create mode 100644 drivers/kernelsu/Kbuild
@@ -10332,10 +10332,10 @@ index 000000000..670918fa5
 +}
 diff --git a/drivers/kernelsu/manager/throne_tracker.c b/drivers/kernelsu/manager/throne_tracker.c
 new file mode 100644
-index 000000000..d506c77ab
+index 000000000..4aefa655f
 --- /dev/null
 +++ b/drivers/kernelsu/manager/throne_tracker.c
-@@ -0,0 +1,415 @@
+@@ -0,0 +1,445 @@
 +#include "ksu.h"
 +#include "linux/cred.h"
 +#include "linux/namei.h"
@@ -10578,6 +10578,32 @@ index 000000000..d506c77ab
 +	}
 +}
 +
++#define GRAPHITE_MANAGER_APK "/system_ext/app/GraphiteKernelSUNext/GraphiteKernelSUNext.apk"
++#define GRAPHITE_MANAGER_PKG "com.rifsxd.ksunext"
++
++static void graphite_crown_system_manager(struct list_head *uid_data)
++{
++	char apk[] = GRAPHITE_MANAGER_APK;
++	struct uid_data *np;
++	struct path p;
++
++	if (kern_path(apk, 0, &p))
++		return;
++	path_put(&p);
++	if (!is_manager_apk(apk)) {
++		pr_err("preinstalled manager failed the signature check: %s\n", apk);
++		return;
++	}
++	list_for_each_entry (np, uid_data, list) {
++		if (strncmp(np->package, GRAPHITE_MANAGER_PKG, KSU_MAX_PACKAGE_NAME) == 0) {
++			pr_info("Crowning preinstalled manager: %s(uid=%d)\n", GRAPHITE_MANAGER_PKG, np->uid);
++			ksu_set_manager_appid(np->uid);
++			strscpy(cached_manager_apk_path, apk, DATA_PATH_LEN);
++			return;
++		}
++	}
++}
++
 +static bool is_uid_exist(uid_t uid, char *package, void *data)
 +{
 +	struct list_head *list = (struct list_head *)data;
@@ -10726,6 +10752,10 @@ index 000000000..d506c77ab
 +#endif
 +		search_manager("/data/app", 2, &uid_list);
 +		pr_info("Search manager finished\n");
++		// Graphite: the manager is preinstalled as a system app, outside /data/app. An installed update in
++		// /data/app still wins; the preinstalled copy passes the same signature check.
++		if (!ksu_is_manager_appid_valid())
++			graphite_crown_system_manager(&uid_list);
 +	}
 +
 +prune:

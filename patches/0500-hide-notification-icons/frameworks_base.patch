@@ -4,6 +4,7 @@ Date: Mon, 2 Nov 2026 20:21:40 +0100
 Subject: [PATCH] Status bar: option to hide notification icons
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
 ---
  .../binder/GraphiteHideNotificationIcons.kt   | 60 +++++++++++++++++++
  .../ui/binder/HomeStatusBarViewBinder.kt      |  1 +

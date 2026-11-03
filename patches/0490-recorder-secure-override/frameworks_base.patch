@@ -5,6 +5,7 @@ Subject: [PATCH] Let SystemUI's screen recorder capture apps on the override
  list
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
 ---
  core/java/android/view/IWindowManager.aidl    |  7 ++
  .../screenrecord/GraphiteRecorderOverride.kt  | 63 ++++++++++++++++
