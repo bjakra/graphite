@@ -68,6 +68,16 @@ Then turn **OEM unlocking** off again in Developer options.
 
 ## 5. Updating a locked phone (keeps your data)
 
+With USB debugging on, this works without touching the phone. `sideload-auto-reboot` goes straight to sideload mode and
+reboots when the install is done:
+
+```bash
+adb reboot sideload-auto-reboot
+adb sideload src/releases/2026110100/release-husky-2026110100/husky-ota_update-2026110100.zip
+```
+
+Without USB debugging, use the manual steps below.
+
 Don't use `flash-all.sh` for this: it needs an unlocked bootloader, and unlocking wipes the phone. Sideload
 the OTA from recovery instead. It's signed with your keys, so the locked bootloader accepts it.
 
