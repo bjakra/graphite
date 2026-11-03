@@ -1,0 +1,23 @@
+title = "Lock screen: the song Now Playing recognised"
+description = """
+Shows the song Graphite Now Playing (org.graphite.nowplaying) recognised nearby as a rotating lock screen indication
+("♪ Track • Artist", new type INDICATION_TYPE_NOW_PLAYING in KeyguardIndicationRotateTextViewController), the way
+Ambient Music Mod drew it with an accessibility overlay. When and how long a song is shown is decided by Now Playing
+(AMM's logic: until the track's estimated end); SystemUI reads getSong from org.graphite.nowplaying.api and observes
+its song URI. SystemUI requests org.graphite.nowplaying.ACCESS_SERVICE (signature) for that. Nothing shows when Now
+Playing is off, not installed, or its "Show the song" switch is off.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "Recognised songs only appear in At a Glance and the history, not on the lock screen."
+category = "feature"
+depends = []
+enabled = true
+notes = ""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0570-lockscreen-now-playing --project <path> --new
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"

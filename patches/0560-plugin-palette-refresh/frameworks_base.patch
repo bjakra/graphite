@@ -1,0 +1,94 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 22:39:02 +0100
+Subject: [PATCH] SystemUI: plugin resources follow overlay changes
+
+A plugin's context was created once from a snapshot of its
+ApplicationInfo, including the framework's Material You overlay, so
+the Pixel lock screen clocks kept the old palette after a wallpaper
+change (AOD, drawn differently, looked right). The plugin context now
+rebuilds its resources from fresh app info when the host's assets
+change.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../systemui/shared/plugins/PluginInstance.kt | 48 ++++++++++++++++---
+ 1 file changed, 41 insertions(+), 7 deletions(-)
+
+diff --git a/packages/SystemUI/shared/src/com/android/systemui/shared/plugins/PluginInstance.kt b/packages/SystemUI/shared/src/com/android/systemui/shared/plugins/PluginInstance.kt
+index 95881e5c04c1b265057adc089869fb877f7901bd..a3b749b11c55fd477b5fdd9ee1c877aaa40cd9d2 100644
+--- a/packages/SystemUI/shared/src/com/android/systemui/shared/plugins/PluginInstance.kt
++++ b/packages/SystemUI/shared/src/com/android/systemui/shared/plugins/PluginInstance.kt
+@@ -342,12 +342,49 @@ class PluginInstance<T : Plugin>(
+         }
+     }
+ 
+-    private class PluginContextWrapper(base: Context?, private val classLoader: ClassLoader) :
+-        ContextWrapper(base) {
++    /**
++     * Graphite: the plugin's resources follow overlay changes. They were created once from a snapshot of the plugin's
++     * ApplicationInfo, whose overlay paths include the framework's Material You overlay, so after a new wallpaper
++     * palette a plugin (the Pixel lock screen clocks) kept the old colours while SystemUI had the new ones. When the
++     * host's assets change (Configuration.assetsSeq), the resources are rebuilt from fresh app info.
++     */
++    private class PluginContextWrapper(
++        private val hostContext: Context,
++        private var appInfo: ApplicationInfo,
++        private val classLoader: ClassLoader,
++    ) : ContextWrapper(hostContext.createApplicationContext(appInfo, 0)) {
+         private val inflater: LayoutInflater by lazy {
+             LayoutInflater.from(baseContext).cloneInContext(this)
+         }
+ 
++        private var assetsSeq = hostContext.resources.configuration.assetsSeq
++        @Volatile private var current: Context = baseContext
++
++        private fun current(): Context {
++            val seq = hostContext.resources.configuration.assetsSeq
++            if (seq != assetsSeq) {
++                synchronized(this) {
++                    if (seq != assetsSeq) {
++                        try {
++                            appInfo = hostContext.packageManager
++                                .getApplicationInfo(appInfo.packageName, 0)
++                            current = hostContext.createApplicationContext(appInfo, 0)
++                        } catch (e: PackageManager.NameNotFoundException) {
++                            // Keep the old resources
++                        }
++                        assetsSeq = seq
++                    }
++                }
++            }
++            return current
++        }
++
++        override fun getResources(): android.content.res.Resources = current().resources
++
++        override fun getAssets(): android.content.res.AssetManager = current().assets
++
++        override fun getTheme(): android.content.res.Resources.Theme = current().theme
++
+         override fun getClassLoader(): ClassLoader {
+             return classLoader
+         }
+@@ -356,7 +393,7 @@ class PluginInstance<T : Plugin>(
+             if (LAYOUT_INFLATER_SERVICE == name) {
+                 return inflater
+             }
+-            return baseContext.getSystemService(name)
++            return current().getSystemService(name)
+         }
+     }
+ 
+@@ -396,10 +433,7 @@ class PluginInstance<T : Plugin>(
+         fun createPluginContext(): Context? {
+             try {
+                 val loader = createClassLoader()
+-                return PluginContextWrapper(
+-                    hostContext.createApplicationContext(pluginAppInfo, 0),
+-                    loader,
+-                )
++                return PluginContextWrapper(hostContext, pluginAppInfo, loader)
+             } catch (ex: PackageManager.NameNotFoundException) {
+                 logger.e("Failed to create plugin context", ex)
+             }

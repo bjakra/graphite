@@ -1,0 +1,22 @@
+title = "SystemUI plugins follow Material You palette changes"
+description = """
+Bug fix (user report 2026-11-03): after a new wallpaper palette, the Pixel lock screen clocks (SystemUI plugins, e.g.
+the Weather clock) kept the old Material You colours with the screen on, while AOD showed the new ones. A plugin's
+context (PluginInstance.PluginContextWrapper) was created once from a snapshot of the plugin's ApplicationInfo, whose
+overlay paths include the framework's palette overlay. It now rebuilds its resources from fresh app info whenever the
+host's Configuration.assetsSeq changes; SystemUI's existing theme-change callbacks then recolour the clock.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "Pixel lock screen clocks keep the previous Material You colours until SystemUI restarts."
+category = "fix"
+depends = []
+enabled = true
+notes = ""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0560-plugin-palette-refresh --project <path> --new
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"

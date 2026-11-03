@@ -1,0 +1,151 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 22:40:22 +0100
+Subject: [PATCH] SystemUI: Now Playing song on the lock screen
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A lock screen indication shows the song Graphite Now Playing recognised
+("♪ Track • Artist") for as long as Now Playing shows it (until the
+track's estimated end, as Ambient Music Mod's lock screen line did), read
+from org.graphite.nowplaying.api and refreshed when it announces a
+change. Off with Now Playing's "Show the song" switch.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ packages/SystemUI/AndroidManifest.xml         |  2 +
+ ...ardIndicationRotateTextViewController.java |  5 ++
+ .../KeyguardIndicationController.java         | 62 +++++++++++++++++++
+ 3 files changed, 69 insertions(+)
+
+diff --git a/packages/SystemUI/AndroidManifest.xml b/packages/SystemUI/AndroidManifest.xml
+index 482239ebf834222b9120e5287b8716f119a16bbb..07776660122c407a63378bfa13eb9bc5a474a4f4 100644
+--- a/packages/SystemUI/AndroidManifest.xml
++++ b/packages/SystemUI/AndroidManifest.xml
+@@ -27,6 +27,8 @@
+     <!-- Used to read wallpaper -->
+     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+     <uses-permission android:name="android.permission.READ_WALLPAPER_INTERNAL" />
++    <!-- Graphite: the song Now Playing recognised, for the lock screen line -->
++    <uses-permission android:name="org.graphite.nowplaying.ACCESS_SERVICE" />
+ 
+     <!-- Used to read storage for all users -->
+     <uses-permission android:name="android.permission.STORAGE_INTERNAL" />
+diff --git a/packages/SystemUI/src/com/android/systemui/keyguard/KeyguardIndicationRotateTextViewController.java b/packages/SystemUI/src/com/android/systemui/keyguard/KeyguardIndicationRotateTextViewController.java
+index 90d973fa2890472688ba7ebb2359d43c3f867abb..7a62bf18f7ed506dfdfb6d4e28212b7233779adf 100644
+--- a/packages/SystemUI/src/com/android/systemui/keyguard/KeyguardIndicationRotateTextViewController.java
++++ b/packages/SystemUI/src/com/android/systemui/keyguard/KeyguardIndicationRotateTextViewController.java
+@@ -409,6 +409,8 @@ public class KeyguardIndicationRotateTextViewController extends
+     public static final int INDICATION_TYPE_CLICK_TO_UNLOCK_HINT = 17;
+     public static final int INDICATION_TYPE_KEY_TO_UNLOCK_HINT = 18;
+     public static final int INDICATION_TYPE_ENTER_TO_UNLOCK_HINT = 19;
++    // Graphite: the song Now Playing recognised nearby
++    public static final int INDICATION_TYPE_NOW_PLAYING = 40;
+ 
+     @IntDef({
+             INDICATION_TYPE_NONE,
+@@ -431,6 +433,7 @@ public class KeyguardIndicationRotateTextViewController extends
+             INDICATION_TYPE_CLICK_TO_UNLOCK_HINT,
+             INDICATION_TYPE_KEY_TO_UNLOCK_HINT,
+             INDICATION_TYPE_ENTER_TO_UNLOCK_HINT,
++            INDICATION_TYPE_NOW_PLAYING,
+     })
+     @Retention(RetentionPolicy.SOURCE)
+     public @interface IndicationType {
+@@ -481,6 +484,8 @@ public class KeyguardIndicationRotateTextViewController extends
+                 return "key_to_unlock_hint";
+             case INDICATION_TYPE_ENTER_TO_UNLOCK_HINT:
+                 return "enter_to_unlock_hint";
++            case INDICATION_TYPE_NOW_PLAYING:
++                return "now_playing";
+             default:
+                 return "unknown[" + type + "]";
+         }
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/KeyguardIndicationController.java b/packages/SystemUI/src/com/android/systemui/statusbar/KeyguardIndicationController.java
+index fcbbc97243593fe84e7cbec41033a76f95d2a157..4627d47fd5b70435fec7ade4a51795cb1db9b0a2 100644
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/KeyguardIndicationController.java
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/KeyguardIndicationController.java
+@@ -46,6 +46,7 @@ import static com.android.systemui.keyguard.KeyguardIndicationRotateTextViewCont
+ import static com.android.systemui.keyguard.KeyguardIndicationRotateTextViewController.INDICATION_TYPE_KEY_TO_UNLOCK_HINT;
+ import static com.android.systemui.keyguard.KeyguardIndicationRotateTextViewController.INDICATION_TYPE_LOGOUT;
+ import static com.android.systemui.keyguard.KeyguardIndicationRotateTextViewController.INDICATION_TYPE_OWNER_INFO;
++import static com.android.systemui.keyguard.KeyguardIndicationRotateTextViewController.INDICATION_TYPE_NOW_PLAYING;
+ import static com.android.systemui.keyguard.KeyguardIndicationRotateTextViewController.INDICATION_TYPE_PERSISTENT_UNLOCK_MESSAGE;
+ import static com.android.systemui.keyguard.KeyguardIndicationRotateTextViewController.INDICATION_TYPE_SECURE_LOCK_DEVICE;
+ import static com.android.systemui.keyguard.KeyguardIndicationRotateTextViewController.INDICATION_TYPE_TRUST;
+@@ -545,6 +546,7 @@ public class KeyguardIndicationController {
+         updateForceIsDismissibleChanged();
+         updateLockScreenDisclosureMsg();
+         updateLockScreenOwnerInfo();
++        updateLockScreenNowPlayingMsg();
+         updateLockScreenBatteryMsg(animate);
+         updateLockScreenUserLockedMsg(userId);
+         updateLockScreenTrustMsg(userId, getTrustGrantedIndication(), getTrustManagedIndication());
+@@ -631,6 +633,66 @@ public class KeyguardIndicationController {
+         return mUserTracker.getUserId();
+     }
+ 
++    // Graphite: the song Now Playing recognised nearby. Graphite Now Playing decides when a song is
++    // shown, like Ambient Music Mod's lock screen line (until the track's estimated end), and
++    // announces changes on its song URI.
++    private static final android.net.Uri NOW_PLAYING_API =
++            android.net.Uri.parse("content://org.graphite.nowplaying.api");
++    private static final android.net.Uri NOW_PLAYING_SONG =
++            android.net.Uri.parse("content://org.graphite.nowplaying.api/song");
++    private boolean mNowPlayingObserving;
++    private final Runnable mNowPlayingExpired = this::updateLockScreenNowPlayingMsg;
++
++    private void updateLockScreenNowPlayingMsg() {
++        if (!mNowPlayingObserving) {
++            mNowPlayingObserving = true;
++            try {
++                mContext.getContentResolver().registerContentObserver(NOW_PLAYING_SONG, false,
++                        new android.database.ContentObserver(null) {
++                            @Override
++                            public void onChange(boolean selfChange) {
++                                mExecutor.execute(() -> updateLockScreenNowPlayingMsg());
++                            }
++                        });
++            } catch (RuntimeException e) {
++                // Now Playing isn't installed
++            }
++        }
++        mBackgroundExecutor.execute(() -> {
++            String track = null;
++            String artist = null;
++            long endTime = 0;
++            try {
++                android.os.Bundle song = mContext.getContentResolver().call(
++                        NOW_PLAYING_API, "getSong", null, null);
++                if (song != null) {
++                    track = song.getString("track");
++                    artist = song.getString("artist");
++                    endTime = song.getLong("endTime");
++                }
++            } catch (RuntimeException e) {
++                // Not installed or not allowed: nothing to show
++            }
++            final long remaining = endTime - System.currentTimeMillis();
++            final String text = track == null || remaining <= 0 ? null
++                    : (artist == null ? "♪ " + track : "♪ " + track + " • " + artist);
++            mExecutor.execute(() -> {
++                if (text != null && mKeyguardStateController.isShowing()) {
++                    mRotateTextViewController.updateIndication(
++                            INDICATION_TYPE_NOW_PLAYING,
++                            new KeyguardIndication.Builder()
++                                    .setMessage(text)
++                                    .setTextColor(getInitialTextColorState())
++                                    .build(),
++                            false);
++                    mExecutor.executeDelayed(mNowPlayingExpired, remaining + 500);
++                } else {
++                    mRotateTextViewController.hideIndication(INDICATION_TYPE_NOW_PLAYING);
++                }
++            });
++        });
++    }
++
+     private void updateLockScreenOwnerInfo() {
+         // Check device owner info on a bg thread.
+         // It makes multiple IPCs that could block the thread it's run on.
