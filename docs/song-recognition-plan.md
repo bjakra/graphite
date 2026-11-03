@@ -57,6 +57,34 @@ and integrate them into the system", in a dedicated Now Playing page in Graphite
 * **Privacy indicator:** SystemUI patch hiding the microphone indicator and the active-apps entry for the engine and
   GraphiteParts' recognition only while Now Playing is on. The patch says it relaxes a privacy indicator.
 
+### Architecture (user choice 2026-11-03: headless AMM core + Graphite UI)
+
+* **Graphite Now Playing core:** fork bjakra/AmbientMusicMod, branch `graphite`, package `org.graphite.nowplaying`. AMM's
+  service, repositories and workers stay as they are (same code means same behaviour; upstream fixes can be merged).
+  Removed: all screens and the launcher entry, Shizuku, GitHub update checks, On Demand, network. Added: an API for
+  Graphite settings (settings, history, track list, actions). Hidden system component in `system_ext/priv-app`.
+* **Graphite settings, Now Playing page:** the only UI. Talks to the core through that API.
+* **Engine** (`com.kieronquinn.app.pixelambientmusic`, bjakra/NowPlaying): host package becomes `org.graphite.nowplaying`.
+* **Downloader** `org.graphite.musicdb`: AMM's `astrea` module as its own tiny app, the only one with `INTERNET`.
+
+### Shizuku replaced in-process (ShizukuService, run as shell by AMM)
+
+Rule: same behaviour as AMM; where something changes, the reason is written here.
+
+| ShizukuService method | Graphite core (same process, platform signed priv-app) |
+|---|---|
+| AudioRecord_* (AudioRecord built with a shell context) | Same calls, built with the core's own context; needs `RECORD_AUDIO` and `CAPTURE_AUDIO_HOTWORD`. Attribution is the core instead of Shell |
+| isCompatible, isRoot, ping | true, false, true: the core always has the permissions, never root |
+| MusicRecognitionManager_* | Only used by On Demand, which is not ported (sends audio to Google) |
+| is/add/removeMicrophoneDisabledListener | Same SensorPrivacyManager calls; `OBSERVE_SENSOR_PRIVACY` |
+| getSystemUIPackageName | Same |
+| dismissKeyguard | Same IWindowManager call; `CONTROL_KEYGUARD` |
+| setOwnerInfo | Root only in AMM, so a no-op there without root; replaced by the native lock screen line |
+| forceStopNowPlaying (`am force-stop`) | `ActivityManager.forceStopPackage`, the API `am force-stop` calls; `FORCE_STOP_PACKAGES` |
+| expediteJobs (`cmd jobscheduler run [-f]`) | The same shell command sent to the jobscheduler binder (`IBinder.shellCommand`), allowed with `CHANGE_APP_IDLE_STATE` |
+| onCreate: grant notification / restricted-settings permissions | Granted by the ROM's default permissions instead |
+| destroy | Not needed: nothing to tear down outside the core's own process |
+
 ### Ambient Music Mod features and where they go
 
 | AMM feature | Graphite |
