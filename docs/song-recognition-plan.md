@@ -124,3 +124,20 @@ and save it as `apps/NowPlaying/base.apk`. The x86_64 build of the same version 
 
 1. Option A with Google's model and database? Yes, if fully offline and only updated with the OS.
 2. Hide the microphone indicator for this service, or keep it? Hide it, and the active-apps entry, while enabled.
+
+## Engine on Android 17: findings (2026-11-03)
+
+* GrapheneOS blocks runtime code changes in system apps; the engine is on the allowlist (overlay, user decision 1a).
+* Kieron Quinn's engine used AliuHook main-SNAPSHOT with LSPlant 6.4 (2024), which fails on Android 17's ART
+  ("Failed to init instrumentation"). Fixed by building LSPlant from upstream master (Android 17 support) on Aliucord's
+  packaging (`apps/hooks/lsplant`, 6.4-aliucord.4-graphite.1) and AliuHook against it (`apps/hooks/aliuhook`,
+  1.1.4-graphite.N), both published to the local Maven repo (`~/.m2`). Needs NDK 30.0.16248370 + CMake 3.31.6 in `sdk/`.
+* `extractNativeLibs=false` and 16 KB alignment: a preinstalled app has no extracted lib folder.
+* Engine binder shell commands (`cmd jobscheduler run`) only work from ADB: replaced by the engine's
+  ExpediteJobsReceiver, which reschedules its own jobs.
+* **Open (x86_64 emulator only):** the engine aborts ~20 s after start in ART's userfaultfd GC ("mremap to move pages
+  failed: Bad address"). Cause: Dobby (AliuHook's inline hooker) on x86_64 puts the address table for its
+  `jmp [rip+x]` hooks in a page within 2 GB of libart, which lands inside ART's LinearAlloc reservation; ART then can't
+  move that region. `dobby_disable_near_branch_trampoline()` does not help on x64. On arm64 Dobby inlines the address
+  (`ldr x17, #8; br x17`), so the phone should not be affected. Fix candidates: Dobby x64 with inline 14-byte
+  absolute jumps, or keep the slot page out of ART's reservations.
