@@ -141,3 +141,14 @@ and save it as `apps/NowPlaying/base.apk`. The x86_64 build of the same version 
   move that region. `dobby_disable_near_branch_trampoline()` does not help on x64. On arm64 Dobby inlines the address
   (`ldr x17, #8; br x17`), so the phone should not be affected. Fix candidates: Dobby x64 with inline 14-byte
   absolute jumps, or keep the slot page out of ART's reservations.
+
+### Database freshness (checked 2026-11-03)
+
+* Google still publishes the database weekly in the format the engine reads (`music-iq-db/updatable_db_v3/`, 189
+  versions, newest 20261101). Kieron Quinn's `AmbientMusicManifest` (`release_v3.json`) is still updated (commit
+  2026-11-03) and points at the newest one (version 3188). AMM's built-in default (20240901, v3099) is only used until
+  its first check.
+* In Graphite the core has no network, so both the manifest check (raw.githubusercontent.com) and the database
+  download (storage.googleapis.com, through Astrea) go through `org.graphite.musicdb`, only during a user-started or
+  scheduled update. The ROM build sets the default to the newest manifest at build time, so a fresh install starts
+  with the database current at that build.
