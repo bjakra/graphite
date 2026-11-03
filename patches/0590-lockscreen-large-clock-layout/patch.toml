@@ -1,0 +1,24 @@
+title = "Lock screen: At a Glance above the large clock"
+description = """
+Bug fix (user report 2026-11-03, Weather clock on husky): with the large lock screen clock, At a Glance
+(bc_smartspace_view) stayed anchored under the hidden small clock while the large clock started at a fixed margin
+sized for one At a Glance line, so taller content (date and next alarm) sat inside the clock, between the Weather
+clock's time and its date and weather, and the clock looked shifted up. For the large clock, SmartspaceSection now
+anchors At a Glance (and the date line for clocks without their own date/weather) at the top, where the small clock
+would be, and ClockSection anchors the large clock below At a Glance, like Pixels. All clocks; the small clock layout
+and the "date below the large clock" layout are unchanged.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "At a Glance can overlap large lock screen clocks (Weather clock: between its time and its date)."
+category = "fix"
+depends = []
+enabled = true
+notes = ""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0590-lockscreen-large-clock-layout --project <path> --new
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"

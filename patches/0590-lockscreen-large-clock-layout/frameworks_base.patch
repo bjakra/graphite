@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 23:20:08 +0100
+Subject: [PATCH] SystemUI: At a Glance above the large clock
+
+With the large clock, At a Glance stayed anchored under the hidden small
+clock while the large clock started at a fixed margin meant for one
+line of At a Glance. Taller content (date and next alarm) ended up
+inside the clock, e.g. between the Weather clock's time and its date and
+weather, and the clock looked shifted up. At a Glance (and the date
+line for clocks without their own) now goes to the top and the large
+clock below it, as on Pixels, for every clock.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../ui/view/layout/sections/ClockSection.kt   | 19 +++++++++++
+ .../view/layout/sections/SmartspaceSection.kt | 32 +++++++++++++++++++
+ 2 files changed, 51 insertions(+)
+
+diff --git a/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/ClockSection.kt b/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/ClockSection.kt
+index e40bd7a49dc114cc5171891c8f144188fdffdbc4..38584313d86d52c1e876d3e11a7c860664f06fc4 100644
+--- a/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/ClockSection.kt
++++ b/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/ClockSection.kt
+@@ -215,6 +215,25 @@ constructor(
+                 TOP,
+                 largeClockTopMargin,
+             )
++            // Graphite: SmartspaceSection puts At a Glance at the top for the large clock; the
++            // large clock goes below it, whatever its height (the fixed margin above assumed one
++            // line, so taller content ended up inside the clock). Every clock, when At a Glance
++            // is on the lock screen and its date isn't drawn below the large clock.
++            if (
++                keyguardClockViewModel.isLargeClockVisible.value &&
++                    !keyguardClockViewModel.shouldDateWeatherBeBelowLargeClock.value &&
++                    knownIds.contains(sharedR.id.bc_smartspace_view)
++            ) {
++                connect(
++                    ClockViewIds.LOCKSCREEN_CLOCK_VIEW_LARGE,
++                    TOP,
++                    sharedR.id.bc_smartspace_view,
++                    BOTTOM,
++                    context.resources.getDimensionPixelSize(
++                        clocksR.dimen.keyguard_smartspace_top_offset
++                    ),
++                )
++            }
+             constrainWidth(ClockViewIds.LOCKSCREEN_CLOCK_VIEW_LARGE, WRAP_CONTENT)
+ 
+             // The following two lines make LOCKSCREEN_CLOCK_VIEW_LARGE is constrained to available
+diff --git a/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/SmartspaceSection.kt b/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/SmartspaceSection.kt
+index 87091b58134af90c5262643ded0d9dc1f281a814..cccb645fa954f50690c6675183361214e194f143 100644
+--- a/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/SmartspaceSection.kt
++++ b/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/SmartspaceSection.kt
+@@ -222,6 +222,38 @@ constructor(
+                 }
+             }
+ 
++            // Graphite: with the large clock, At a Glance goes to the top (where the small clock
++            // would be) and the large clock below it, as on Pixels. It stayed anchored under the
++            // hidden small clock while the large clock started at a fixed margin, so taller At a
++            // Glance content (date and alarm) ended up inside the clock, e.g. between the
++            // Weather clock's time and its date and weather. Applies to every clock.
++            if (isLargeClockVisible && !dateWeatherBelowLargeClock) {
++                val showsOwnDate = keyguardClockViewModel.hasCustomWeatherDataDisplay.value
++                if (showsOwnDate) {
++                    connect(
++                        sharedR.id.bc_smartspace_view,
++                        ConstraintSet.TOP,
++                        R.id.small_clock_guideline_top,
++                        ConstraintSet.TOP,
++                    )
++                } else {
++                    clear(sharedR.id.date_smartspace_view, ConstraintSet.BOTTOM)
++                    connect(
++                        sharedR.id.date_smartspace_view,
++                        ConstraintSet.TOP,
++                        R.id.small_clock_guideline_top,
++                        ConstraintSet.TOP,
++                    )
++                    connect(
++                        sharedR.id.bc_smartspace_view,
++                        ConstraintSet.TOP,
++                        sharedR.id.date_smartspace_view,
++                        ConstraintSet.BOTTOM,
++                    )
++                }
++                // The large clock is anchored below it in ClockSection (applied after this one)
++            }
++
+             if (
+                 isLargeClockVisible &&
+                     keyguardClockViewModel.shouldDateWeatherBeBelowLargeClock.value
