@@ -155,3 +155,23 @@ and save it as `apps/NowPlaying/base.apk`. The x86_64 build of the same version 
   download (storage.googleapis.com, through Astrea) go through `org.graphite.musicdb`, only during a user-started or
   scheduled update. The ROM build sets the default to the newest manifest at build time, so a fresh install starts
   with the database current at that build.
+
+## Progress (2026-11-03)
+
+Done and tested on the emulator:
+* Engine on Android 17 (hook stack, allowlist), core recording (microphone FGS), database download through the
+  downloader, database version 3188 (2026-11-01).
+* Network only during updates: core grants/revokes the downloader's INTERNET, opens/closes the window
+  (Settings.Global `graphite_nowplaying_update_until`), Astrea gate (music-iq-db + AMM manifest only). Closed at start.
+* Core API (`org.graphite.nowplaying.api`): getState, setEnabled, getSettings/setSetting (AMM's settings with AMM's
+  labels), recognise/getRecognition/cancelRecognition, updateDatabase/getDatabase, getCountries/setCountry/
+  setExtraCountries.
+* Graphite settings → Now Playing: switch, history (engine screen), notifications, settings page.
+
+In progress / next:
+* GraphiteParts: recognise-now dialog, music database page, pause at night (built, to test), country pickers.
+* Remove AMM's screens from the core once every page exists (backup & restore, track list, lock screen options).
+* Lock screen song line (SystemUI), At a Glance card (Lawnchair), Quick Settings tile, setup page.
+* SystemUI: hide the mic indicator and active-apps entry for the core and engine while Now Playing is on.
+* ROM packaging: core (priv-app, privapp permissions, default permissions RECORD_AUDIO/POST_NOTIFICATIONS for core and
+  engine, READ_PHONE_STATE for engine, power-save allowlist), downloader, engine; newest manifest as default at build.
