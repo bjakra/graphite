@@ -26,3 +26,10 @@ every existing toggle has to actually do what it says.
 | 18 | Double tap to sleep and double tap to wake on the lock screen | SystemUI, framework | Lock screen gesture for sleep. Wake depends on the Pixel 8 touchscreen supporting tap-to-wake. Switches in Graphite lock screen settings. | Written (patch 0530): AOSP lock screen double tap to sleep enabled; double tap to wake on the single tap sensor; switches in Graphite settings, Lock screen. Needs the phone: emulator taps are rejected as synthetic |
 | 19 | Offline song recognition (like Now Playing / Ambient Music Mod) | System service | Background system service with an offline database, off by default, a switch in settings and in setup, no launcher icon, not listening at all when off. Hiding the microphone indicator is a privacy exception and needs its own clearly described patch. Database source still to be decided. | Decided 2026-11-03 (see docs/song-recognition-plan.md): Google model and database, fully offline, database only via OS updates, mic indicator and active-apps entry hidden while enabled. Waiting for the user to download the Android System Intelligence APK (APKMirror blocks scripts) |
 | 20 | Status bar AM/PM and network speed options don't work or apply | SystemUI, Graphite settings | Check both on the phone and in the emulator. | Done: network speed hid itself below 1 KB/s, now always shown while on (0 KB/s idle); AM/PM only exists in 12-hour time, so its switch is greyed out with an explanation in 24-hour time. Both apply immediately |
+
+## Plan to the release (user, 2026-11-03)
+
+Finish everything open (Now Playing: track list, backup and restore, lock screen song line, At a Glance card, Quick
+Settings tile, setup; any bug fixes), then build the husky release, flash it over ADB sideload
+(`adb reboot sideload-auto-reboot` + `adb sideload`), check the phone boots normally (not fastboot/recovery, no
+failure), and only then shut down the PC.
