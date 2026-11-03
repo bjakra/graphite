@@ -1,13 +1,13 @@
 title = "SystemUI: clock AM/PM and position, network speed"
 description = """
 Status bar options from Graphite settings, all off by default: AM/PM in 12-hour time
-(graphite_clock_am_pm) and
-a network speed view (NetworkTrafficView, graphite_network_traffic). No centred clock: the
-Pixel 8 Pro camera cutout is in the middle.
+(graphite_clock_am_pm; Graphite settings greys the switch out in 24-hour time) and a network speed
+view (NetworkTrafficView, graphite_network_traffic), visible while enabled, 0 KB/s when idle. Both
+apply immediately. No centred clock: the Pixel 8 Pro camera cutout is in the middle.
 """
 # false = the ROM still builds and works without it; build.sh may skip it on failure
 required = false
-skip_impact = "Those three status bar options do nothing."
+skip_impact = "The AM/PM and network speed status bar options do nothing."
 category = "feature"
 depends = []
 enabled = true

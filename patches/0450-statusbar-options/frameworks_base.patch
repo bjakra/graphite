@@ -260,6 +260,7 @@ Date: Mon, 2 Nov 2026 18:37:14 +0100
 Subject: [PATCH] SystemUI: remove the right-side clock option
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
 ---
  .../systemui/statusbar/policy/Clock.java      | 29 ++-----------------
  1 file changed, 2 insertions(+), 27 deletions(-)
@@ -317,5 +318,55 @@ index 147abb7762f83557ca2964b1d447d9d12ec65696..89196730d8201168b0f4e7c51cf48266
 -            start.addView(this, start.indexOfChild(
 -                    start.findViewById(R.id.start_side_notif_and_chip_container)));
          }
+     }
+ 
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 17:11:26 +0100
+Subject: [PATCH] SystemUI: show network speed while idle too
+
+The view hid itself below 1 KB/s, so on an idle phone switching it on
+looked like it did nothing. It now shows right away and stays visible
+while enabled, with 0 KB/s when idle.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../systemui/statusbar/policy/NetworkTrafficView.java | 11 ++++-------
+ 1 file changed, 4 insertions(+), 7 deletions(-)
+
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/policy/NetworkTrafficView.java b/packages/SystemUI/src/com/android/systemui/statusbar/policy/NetworkTrafficView.java
+index b32cbaf0467866c81b71589f91a30099b12987ef..741285e0b832d84933b4ee67d468d1993d0a11aa 100644
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/policy/NetworkTrafficView.java
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/policy/NetworkTrafficView.java
+@@ -39,7 +39,6 @@ public class NetworkTrafficView extends TextView
+         implements TunerService.Tunable, DarkIconDispatcher.DarkReceiver {
+     public static final String SETTING = "graphite_network_traffic";
+     private static final long POLL_INTERVAL_MS = 2000;
+-    private static final long MIN_BYTES_PER_SECOND = 1024;
+ 
+     private boolean mEnabled;
+     private long mLastBytes;
+@@ -94,6 +93,9 @@ public class NetworkTrafficView extends TextView
+         }
+         mLastBytes = totalBytes();
+         mLastTime = SystemClock.elapsedRealtime();
++        // Shown right away and while idle, so switching it on visibly does something
++        setText(format(0));
++        setVisibility(View.VISIBLE);
+         postDelayed(mPoll, POLL_INTERVAL_MS);
+     }
+ 
+@@ -104,12 +106,7 @@ public class NetworkTrafficView extends TextView
+         long speed = Math.max(0, bytes - mLastBytes) * 1000 / elapsed;
+         mLastBytes = bytes;
+         mLastTime = now;
+-        if (speed < MIN_BYTES_PER_SECOND) {
+-            setVisibility(View.GONE);
+-        } else {
+-            setText(format(speed));
+-            setVisibility(View.VISIBLE);
+-        }
++        setText(format(speed));
+         postDelayed(mPoll, POLL_INTERVAL_MS);
      }
  
