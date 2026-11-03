@@ -1,0 +1,182 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 22:47:03 +0100
+Subject: [PATCH] Setup: optional Now Playing step
+
+After the gestures step, an optional step offers Now Playing (on-device
+song recognition), off unless "Turn on" is pressed; it uses the same
+switch as Graphite settings and is skipped when Now Playing isn't
+installed.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ AndroidManifest.xml                           |  4 ++
+ .../setupwizard/action/SetupWizard.kt         |  2 +
+ .../view/activity/NowPlayingActivity.kt       | 46 +++++++++++++++++++
+ res/drawable/baseline_music_note.xml          |  6 +++
+ res/drawable/baseline_music_note_glif.xml     |  7 +++
+ res/layout/activity_now_playing.xml           | 16 +++++++
+ res/values/strings.xml                        |  5 ++
+ 7 files changed, 86 insertions(+)
+ create mode 100644 java/app/grapheneos/setupwizard/view/activity/NowPlayingActivity.kt
+ create mode 100644 res/drawable/baseline_music_note.xml
+ create mode 100644 res/drawable/baseline_music_note_glif.xml
+ create mode 100644 res/layout/activity_now_playing.xml
+
+diff --git a/AndroidManifest.xml b/AndroidManifest.xml
+index 9f988f1be3566c350bdde9568041747c55a96268..1c079fadaa0de31f776df3454c0c74ecb11b62c9 100644
+--- a/AndroidManifest.xml
++++ b/AndroidManifest.xml
+@@ -5,6 +5,8 @@
+     tools:ignore="ProtectedPermissions">
+ 
+     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
++    <!-- Graphite: turn on Now Playing from its setup step -->
++    <uses-permission android:name="org.graphite.nowplaying.ACCESS_SERVICE" />
+     <uses-permission android:name="android.permission.CHANGE_CONFIGURATION" />
+     <uses-permission android:name="android.permission.MANAGE_USER_OEM_UNLOCK_STATE" />
+     <uses-permission android:name="android.permission.NETWORK_SETUP_WIZARD" />
+@@ -46,6 +48,8 @@
+         <activity android:name=".view.activity.SecurityActivity" />
+         <activity android:name=".view.activity.MigrationActivity" />
+         <activity android:name=".view.activity.GesturesActivity" />
++        <!-- Graphite: optional Now Playing step -->
++        <activity android:name=".view.activity.NowPlayingActivity" />
+         <activity android:name=".view.activity.FinishActivity" />
+     </application>
+ 
+diff --git a/java/app/grapheneos/setupwizard/action/SetupWizard.kt b/java/app/grapheneos/setupwizard/action/SetupWizard.kt
+index 4c543c00195ebeb1eae08a4703dd2a1a11f0ef9e..f37545ab7d841d26f1d0eb97e0e794d6908db657 100644
+--- a/java/app/grapheneos/setupwizard/action/SetupWizard.kt
++++ b/java/app/grapheneos/setupwizard/action/SetupWizard.kt
+@@ -14,6 +14,7 @@ import app.grapheneos.setupwizard.appContext
+ import app.grapheneos.setupwizard.view.activity.DateTimeActivity
+ import app.grapheneos.setupwizard.view.activity.FinishActivity
+ import app.grapheneos.setupwizard.view.activity.GesturesActivity
++import app.grapheneos.setupwizard.view.activity.NowPlayingActivity
+ import app.grapheneos.setupwizard.view.activity.LocationActivity
+ import app.grapheneos.setupwizard.view.activity.MigrationActivity
+ import app.grapheneos.setupwizard.view.activity.SecurityActivity
+@@ -36,6 +37,7 @@ object SetupWizard {
+         UpdaterSecurityPreviewActivity::class.java,
+         MigrationActivity::class.java,
+         GesturesActivity::class.java,
++        NowPlayingActivity::class.java,
+         FinishActivity::class.java
+     )
+     private val secondaryUserActivities = listOf<Class<out Activity>>(
+diff --git a/java/app/grapheneos/setupwizard/view/activity/NowPlayingActivity.kt b/java/app/grapheneos/setupwizard/view/activity/NowPlayingActivity.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..406675d3d05ca66bc7ce880a0e5b75d350e1ef6d
+--- /dev/null
++++ b/java/app/grapheneos/setupwizard/view/activity/NowPlayingActivity.kt
+@@ -0,0 +1,46 @@
++package app.grapheneos.setupwizard.view.activity
++
++import android.net.Uri
++import android.os.Bundle
++import app.grapheneos.setupwizard.R
++import app.grapheneos.setupwizard.action.SetupWizard
++
++/**
++ * Graphite: optional step for Now Playing (on-device song recognition), off unless turned on here or later in
++ * Graphite settings. Skipped when Graphite Now Playing isn't installed.
++ */
++class NowPlayingActivity : SetupWizardActivity(
++    R.layout.activity_now_playing,
++    R.drawable.baseline_music_note_glif,
++    R.string.now_playing_title,
++    R.string.now_playing_desc
++) {
++    companion object {
++        private const val AUTHORITY = "org.graphite.nowplaying.api"
++    }
++
++    override fun onCreate(savedInstanceState: Bundle?) {
++        super.onCreate(savedInstanceState)
++        if (packageManager.resolveContentProvider(AUTHORITY, 0) == null) {
++            SetupWizard.next(this)
++            finish()
++        }
++    }
++
++    override fun bindViews() {
++        primaryButton.setText(this, R.string.now_playing_turn_on)
++        secondaryButton.setText(this, R.string.now_playing_not_now)
++    }
++
++    override fun setupActions() {
++        secondaryButton.setOnClickListener { SetupWizard.next(this) }
++        primaryButton.setOnClickListener {
++            // The same switch as Graphite settings, Now Playing
++            runCatching {
++                contentResolver.call(Uri.parse("content://$AUTHORITY"), "setEnabled", null,
++                    Bundle().apply { putBoolean("value", true) })
++            }
++            SetupWizard.next(this)
++        }
++    }
++}
+diff --git a/res/drawable/baseline_music_note.xml b/res/drawable/baseline_music_note.xml
+new file mode 100644
+index 0000000000000000000000000000000000000000..0f908d3b3a42f95bda8720966c2d137ceaa84de4
+--- /dev/null
++++ b/res/drawable/baseline_music_note.xml
+@@ -0,0 +1,6 @@
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="96dp" android:height="96dp" android:viewportWidth="24" android:viewportHeight="24"
++    android:tint="?android:attr/colorControlNormal">
++    <path android:fillColor="@android:color/white"
++        android:pathData="M12,3v10.55c-0.59,-0.34 -1.27,-0.55 -2,-0.55 -2.21,0 -4,1.79 -4,4s1.79,4 4,4 4,-1.79 4,-4V7h4V3h-6z" />
++</vector>
+diff --git a/res/drawable/baseline_music_note_glif.xml b/res/drawable/baseline_music_note_glif.xml
+new file mode 100644
+index 0000000000000000000000000000000000000000..fcff695491365e6993fa25b5f85f47b018ecae23
+--- /dev/null
++++ b/res/drawable/baseline_music_note_glif.xml
+@@ -0,0 +1,7 @@
++<?xml version="1.0" encoding="utf-8"?>
++<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
++    <item
++        android:width="?attr/sudGlifIconSize"
++        android:height="?attr/sudGlifIconSize"
++        android:drawable="@drawable/baseline_music_note" />
++</layer-list>
+diff --git a/res/layout/activity_now_playing.xml b/res/layout/activity_now_playing.xml
+new file mode 100644
+index 0000000000000000000000000000000000000000..db7b672b4b002d86351cbb946d19a560891121d2
+--- /dev/null
++++ b/res/layout/activity_now_playing.xml
+@@ -0,0 +1,16 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Graphite: Now Playing step -->
++<com.google.android.setupdesign.GlifLayout xmlns:android="http://schemas.android.com/apk/res/android"
++    xmlns:app="http://schemas.android.com/apk/res-auto"
++    android:id="@+id/glif_layout"
++    android:layout_width="match_parent"
++    android:layout_height="match_parent">
++
++    <ImageView
++        style="@style/SudContentIllustrationExtended"
++        android:layout_width="wrap_content"
++        android:layout_height="wrap_content"
++        android:importantForAccessibility="no"
++        android:src="@drawable/baseline_music_note"
++        app:tint="?attr/colorControlHighlight" />
++</com.google.android.setupdesign.GlifLayout>
+diff --git a/res/values/strings.xml b/res/values/strings.xml
+index 1aaad571a140f82934e7da0893e76161fdf86364..dd1f2add393de09024073cd82d3f9c2afc4bd359 100644
+--- a/res/values/strings.xml
++++ b/res/values/strings.xml
+@@ -44,6 +44,11 @@
+     <string name="restore">Restore</string>
+     <string name="swipe_gestures_title">Swipe to navigate your phone</string>
+     <string name="swipe_gestures_desc">Learn gestures to go home, go back and switch between apps</string>
++    <!-- Graphite: Now Playing step -->
++    <string name="now_playing_title">Identify songs playing nearby</string>
++    <string name="now_playing_desc">Now Playing recognises music around you and shows it on the lock screen. It works entirely on this phone: nothing you hear is sent anywhere, and it never connects to the internet unless you update its song database. You can change this later in Graphite settings.</string>
++    <string name="now_playing_turn_on">Turn on</string>
++    <string name="now_playing_not_now">Not now</string>
+     <string name="try_it">Try it</string>
+     <string name="oem_unlocked_warning">The bootloader is unlocked and software integrity can not be guaranteed. Any data stored on this device may be available to attackers. Do not store any sensitive data on this device.</string>
+     <string name="visit_this_link_on_another_device">Visit this link on another device:</string>

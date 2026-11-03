@@ -1,0 +1,21 @@
+title = "Setup: optional Now Playing step"
+description = """
+Adds an optional step to GrapheneOS' setup wizard (SetupWizard2), after the gestures step, for Now Playing (on-device
+song recognition): "Turn on" enables it through Graphite Now Playing's API (org.graphite.nowplaying.api, the same switch
+as Graphite settings, needs the ACCESS_SERVICE signature permission), "Not now" leaves it off (the default). The step
+skips itself when Graphite Now Playing isn't installed.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "No Now Playing step in setup; it can still be turned on in Graphite settings."
+category = "feature"
+depends = []
+enabled = true
+notes = ""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0580-setup-now-playing --project <path> --new
+
+[[change]]
+project = "packages/apps/SetupWizard2"
+file = "packages_apps_SetupWizard2.patch"
