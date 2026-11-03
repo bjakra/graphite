@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 18:12:37 +0100
+Subject: [PATCH] OBSERVE_SENSOR_PRIVACY: also privileged
+
+Lets an allowlisted privileged app (Graphite Now Playing) read whether
+the microphone privacy toggle is on, as Ambient Music Mod does through
+the shell user. Read-only; MANAGE_SENSOR_PRIVACY is unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ core/res/AndroidManifest.xml | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/core/res/AndroidManifest.xml b/core/res/AndroidManifest.xml
+index d49a48f8d11b1bbecfdb94659af2eb131f901c57..240d83d708fc8380488c94ebf9e9b421d669b21c 100644
+--- a/core/res/AndroidManifest.xml
++++ b/core/res/AndroidManifest.xml
+@@ -9206,9 +9206,11 @@
+                 android:protectionLevel="internal|role|installer" />
+ 
+     <!-- @SystemApi Allows sensor privacy changes to be observed.
++         Graphite: also privileged, so an allowlisted privileged app (Graphite Now Playing) can read
++         whether the microphone toggle is on. Read-only; changing it still needs MANAGE_SENSOR_PRIVACY.
+          @hide -->
+     <permission android:name="android.permission.OBSERVE_SENSOR_PRIVACY"
+-                android:protectionLevel="internal|role|installer"
++                android:protectionLevel="internal|role|installer|privileged"
+                 android:permissionFlags="allowedInPrivateComputeCore" />
+ 
+     <!-- @SystemApi Permission that protects the {@link Intent#ACTION_REVIEW_ACCESSIBILITY_SERVICES}

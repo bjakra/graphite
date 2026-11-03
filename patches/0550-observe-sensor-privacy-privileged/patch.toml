@@ -1,0 +1,22 @@
+title = "Let allowlisted privileged apps read the sensor privacy toggles"
+description = """
+RELAXES A PERMISSION (user decision 2026-11-03). OBSERVE_SENSOR_PRIVACY ("internal|role|installer") gets
+"|privileged", so a privileged app that is on the privapp-permissions allowlist can read whether the microphone or
+camera privacy toggle is on and get told when it changes. Only Graphite Now Playing (org.graphite.nowplaying) is
+allowlisted: like Ambient Music Mod, it skips recognitions while the microphone is off and says why. Reading only;
+changing the toggles still needs MANAGE_SENSOR_PRIVACY, which is unchanged.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "Graphite Now Playing can't see the microphone toggle: with the microphone off it keeps trying to recognise silence and shows no notice."
+category = "feature"
+depends = []
+enabled = true
+notes = ""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0550-observe-sensor-privacy-privileged --project <path> --new
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"
