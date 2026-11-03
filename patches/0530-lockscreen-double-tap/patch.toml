@@ -1,0 +1,25 @@
+title = "Lock screen: double tap to sleep and to wake"
+description = """
+Enables AOSP's lock screen double tap to sleep (aconfig com.android.systemui.double_tap_to_sleep in the cp2a value set,
+plus config_supportDoubleTapSleep from the Graphite overlay); it follows Settings.Secure double_tap_to_sleep. Adds double
+tap to wake for devices with only a single tap sensor: with Secure graphite_double_tap_to_wake = 1, DozeTriggers ignores a
+first tap and wakes on a second one within 600 ms. Switches are in Graphite settings, Lock screen.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "No double tap to sleep or wake on the lock screen; the Graphite switches do nothing."
+category = "feature"
+depends = []
+enabled = true
+notes = ""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0530-lockscreen-double-tap --project <path> --new
+
+[[change]]
+project = "build/release"
+file = "build_release.patch"
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"

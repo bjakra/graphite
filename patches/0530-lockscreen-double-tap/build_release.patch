@@ -1,0 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 15:03:25 +0100
+Subject: [PATCH] Enable lock screen double tap to sleep
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../double_tap_to_sleep_flag_values.textproto               | 6 ++++++
+ 1 file changed, 6 insertions(+)
+ create mode 100644 aconfig/cp2a/com.android.systemui/double_tap_to_sleep_flag_values.textproto
+
+diff --git a/aconfig/cp2a/com.android.systemui/double_tap_to_sleep_flag_values.textproto b/aconfig/cp2a/com.android.systemui/double_tap_to_sleep_flag_values.textproto
+new file mode 100644
+index 0000000000000000000000000000000000000000..b9f493760c000cdddd5c396b96505671d5ebd7a6
+--- /dev/null
++++ b/aconfig/cp2a/com.android.systemui/double_tap_to_sleep_flag_values.textproto
+@@ -0,0 +1,6 @@
++flag_value {
++  package: "com.android.systemui"
++  name: "double_tap_to_sleep"
++  state: ENABLED
++  permission: READ_ONLY
++}

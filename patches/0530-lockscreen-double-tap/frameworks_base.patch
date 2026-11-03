@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 15:03:25 +0100
+Subject: [PATCH] Doze: double tap to wake with a single tap sensor
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../com/android/systemui/doze/DozeTriggers.java  | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/packages/SystemUI/src/com/android/systemui/doze/DozeTriggers.java b/packages/SystemUI/src/com/android/systemui/doze/DozeTriggers.java
+index e8405b68b1e88d0a6693a57bf88f64d0dcf8a6a3..922b5cb85e19016ef0a8ebebf711c00fac8e0938 100644
+--- a/packages/SystemUI/src/com/android/systemui/doze/DozeTriggers.java
++++ b/packages/SystemUI/src/com/android/systemui/doze/DozeTriggers.java
+@@ -28,6 +28,8 @@ import android.content.Context;
+ import android.content.Intent;
+ import android.content.IntentFilter;
+ import android.hardware.display.AmbientDisplayConfiguration;
++import android.provider.Settings;
++import android.os.UserHandle;
+ import android.os.SystemClock;
+ import android.text.format.Formatter;
+ import android.util.IndentingPrintWriter;
+@@ -304,10 +306,24 @@ public class DozeTriggers implements DozeMachine.Part {
+         }
+     }
+ 
++    private static final long GRAPHITE_DOUBLE_TAP_MILLIS = 600;
++    private long mGraphiteLastTap;
++
+     @VisibleForTesting
+     void onSensor(int pulseReason, float screenX, float screenY, float[] rawValues) {
+         boolean isDoubleTap = pulseReason == DozeLog.REASON_SENSOR_DOUBLE_TAP;
+         boolean isTap = pulseReason == DozeLog.REASON_SENSOR_TAP;
++        // Graphite: double tap to wake on devices with only a single tap sensor. The first tap is
++        // remembered, and only a second one shortly after wakes the screen.
++        if (isTap && Settings.Secure.getIntForUser(mContext.getContentResolver(),
++                "graphite_double_tap_to_wake", 0, UserHandle.USER_CURRENT) == 1) {
++            long now = SystemClock.uptimeMillis();
++            if (now - mGraphiteLastTap > GRAPHITE_DOUBLE_TAP_MILLIS) {
++                mGraphiteLastTap = now;
++                return;
++            }
++            mGraphiteLastTap = 0;
++        }
+         boolean isPickup = pulseReason == DozeLog.REASON_SENSOR_PICKUP;
+         boolean isLongPress = pulseReason == DozeLog.PULSE_REASON_SENSOR_LONG_PRESS;
+         boolean isWakeOnPresence = pulseReason == DozeLog.REASON_SENSOR_WAKE_UP_PRESENCE;
