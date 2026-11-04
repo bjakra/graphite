@@ -184,7 +184,6 @@ Everything is tracked on GitHub under `bjakra`. Keep them up to date when a chan
 | `NowPlaying` (`graphite`) | Now Playing engine (`com.kieronquinn.app.pixelambientmusic`) built around Google's recognition APK. Built by `tools/apps/build-nowplaying.sh` | `apps/NowPlaying` |
 | `LSPlant`, `hook` (`graphite`) | Hook libraries the engine needs on Android 17. Built in order by `tools/apps/build-hooks.sh` | `apps/hooks/` |
 | `dobby-android-graphite`, `dobby-graphite` (private) | Dobby with x86_64 inline jumps. Only the emulator build needs it (`-PgraphiteDobby`) | `apps/hooks/dobby-android` |
-| `graphite_depth_wallpaper` | The 3D wallpaper. Built by `tools/apps/build-depth-wallpaper.sh`, which downloads its models | `apps/GraphiteDepthWallpaper` |
 | `Smartspacer`, `ClassicPowerMenu` (`graphite`) | Older forks. Their features are now built into Lawnchair and SystemUI patches, so they don't ship | `apps/` |
 
 The Now Playing design (privacy, network gating, database updates) is described in
