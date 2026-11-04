@@ -11,7 +11,7 @@
 # patches first and keeps a rollback snapshot). A new upstream release can't
 # break this script by itself.
 
-PINNED_TAG="2026103100"   # managed by update.sh — do not edit by hand
+PINNED_TAG="2026110200"   # managed by update.sh — do not edit by hand
 
 set -euo pipefail
 source "$(dirname "$(readlink -f "$0")")/tools/lib/common.sh"
