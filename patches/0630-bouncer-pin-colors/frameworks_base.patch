@@ -1,26 +1,24 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Bjarne <87858321+bjakra@users.noreply.github.com>
 Date: Wed, 4 Nov 2026 14:47:16 +0100
-Subject: [PATCH] SystemUI: PIN pad in the lock screen's button colours,
+Subject: [PATCH] SystemUI: PIN digits in the lock screen's button colour,
  following the palette
 
-- The keys take the colour of the lock screen's torch, camera and fingerprint buttons (surface
-  effect 1 with blur, surface container high without); delete and enter the colour of a switched-on
-  shortcut (primary fixed). Before, they used a separate keypad colour that looked blue next to the
-  lock screen.
+- The number keys take the colour of the lock screen's torch, camera and fingerprint buttons
+  (surface effect 1 with blur, surface container high without). Delete and enter keep theirs.
 - The keypad colours were only read at inflation. The biometric second factor PIN view is preloaded
   and kept, so after a Material You change it could keep the previous palette. PIN views now reload
   their colours whenever they're shown, and a theme change reloads every inflated security view.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- .../keyguard/KeyguardInputViewController.java |  7 ++++++
- .../KeyguardPinBasedInputViewController.java  |  3 +++
- .../KeyguardSecurityContainerController.java  |  3 +++
- ...KeyguardSecurityViewFlipperController.java |  7 ++++++
- .../com/android/keyguard/NumPadAnimator.java  | 16 ++++---------
- .../systemui/bouncer/ui/BouncerColors.kt      | 23 ++++++++++++-------
- 6 files changed, 39 insertions(+), 20 deletions(-)
+ .../keyguard/KeyguardInputViewController.java    |  7 +++++++
+ .../KeyguardPinBasedInputViewController.java     |  3 +++
+ .../KeyguardSecurityContainerController.java     |  3 +++
+ .../KeyguardSecurityViewFlipperController.java   |  7 +++++++
+ .../src/com/android/keyguard/NumPadAnimator.java |  9 ++++++---
+ .../android/systemui/bouncer/ui/BouncerColors.kt | 16 +++++++++++++---
+ 6 files changed, 39 insertions(+), 6 deletions(-)
 
 diff --git a/packages/SystemUI/src/com/android/keyguard/KeyguardInputViewController.java b/packages/SystemUI/src/com/android/keyguard/KeyguardInputViewController.java
 index 9ebe2f8c4c1dc876789d96ce9eb1deb538afcf8e..3ac8979ddfe69f5ad07514390e2cd379bc5f81da 100644
@@ -87,37 +85,37 @@ index 05632b6131d9da95bac2f90b6db378d0251068c6..3fbbd0db4367bc31abaa8bd79031c22b
      public void clearViews() {
          mOnViewInflatedListeners.clear();
 diff --git a/packages/SystemUI/src/com/android/keyguard/NumPadAnimator.java b/packages/SystemUI/src/com/android/keyguard/NumPadAnimator.java
-index 0d246b5247768429c67dbbda6d027870c988e963..c38b2a4cf4a2c541831bf3bb598f39dbf1baa1bb 100644
+index 0d246b5247768429c67dbbda6d027870c988e963..3c9f7c429db3f297845843dbe3d3aefea89f358e 100644
 --- a/packages/SystemUI/src/com/android/keyguard/NumPadAnimator.java
 +++ b/packages/SystemUI/src/com/android/keyguard/NumPadAnimator.java
-@@ -160,18 +160,10 @@ class NumPadAnimator {
+@@ -160,7 +160,11 @@ class NumPadAnimator {
      void reloadColors(Context context) {
          boolean isNumPadKey = mImageButton == null;
  
 -        if (!Flags.bouncerUiRevamp2()) {
--            int[] customAttrs = {android.R.attr.colorControlNormal};
--            ContextThemeWrapper ctw = new ContextThemeWrapper(context, mStyle);
--            @SuppressLint("ResourceType") TypedArray a = ctw.obtainStyledAttributes(customAttrs);
--
--            mNormalBackgroundColor = a.getColor(0, context.getColor(NUM_PAD_BACKGROUND));
--
--            a.recycle();
--        } else {
++        if (isNumPadKey) {
++            // Graphite: digits always take the lock screen button colour (BouncerColors.pinDigitBg),
++            // with or without the bouncer revamp flag; delete and enter keep theirs
++            mNormalBackgroundColor = BouncerColors.pinDigitBg(context);
++        } else if (!Flags.bouncerUiRevamp2()) {
+             int[] customAttrs = {android.R.attr.colorControlNormal};
+             ContextThemeWrapper ctw = new ContextThemeWrapper(context, mStyle);
+             @SuppressLint("ResourceType") TypedArray a = ctw.obtainStyledAttributes(customAttrs);
+@@ -169,8 +173,7 @@ class NumPadAnimator {
+ 
+             a.recycle();
+         } else {
 -            mNormalBackgroundColor = isNumPadKey ? BouncerColors.pinDigitBg(context)
 -                            : BouncerColors.pinActionBg(context);
--        }
-+        // Graphite: always the lock screen shortcut colours (BouncerColors), with or without the
-+        // bouncer revamp flag, so the keypad matches the lock screen in every palette
-+        mNormalBackgroundColor = isNumPadKey ? BouncerColors.pinDigitBg(context)
-+                        : BouncerColors.pinActionBg(context);
++            mNormalBackgroundColor = BouncerColors.pinActionBg(context);
+         }
  
          mPressedBackgroundColor = context.getColor(Color.bgPressed);
-         mTextColorPressed = context.getColor(Color.digitPressed);
 diff --git a/packages/SystemUI/src/com/android/systemui/bouncer/ui/BouncerColors.kt b/packages/SystemUI/src/com/android/systemui/bouncer/ui/BouncerColors.kt
-index 719893299ece32cd4be37aa6bc99485ad9b18e24..0fc9f6eac34152400b5d695fa7a02e81271ebbf1 100644
+index 719893299ece32cd4be37aa6bc99485ad9b18e24..bf89deb3a56f702ad1d618e205cc8bfde157bb34 100644
 --- a/packages/SystemUI/src/com/android/systemui/bouncer/ui/BouncerColors.kt
 +++ b/packages/SystemUI/src/com/android/systemui/bouncer/ui/BouncerColors.kt
-@@ -33,21 +33,28 @@ object BouncerColors {
+@@ -33,12 +33,17 @@ object BouncerColors {
          }
      }
  
@@ -138,19 +136,13 @@ index 719893299ece32cd4be37aa6bc99485ad9b18e24..0fc9f6eac34152400b5d695fa7a02e81
          }
      }
  
-+    /** Graphite: delete and enter take the colour of a switched-on lock screen shortcut. */
-     @JvmStatic
-     fun Context.pinActionBg(): Int {
--        return if (Flags.bouncerUiRevamp() && Flags.bouncerUiRevamp2()) {
--            return getColor(color.pin_bouncer_action_button_bg)
--        } else {
--            getColor(NUM_PAD_BACKGROUND)
--        }
-+        return getColor(com.android.internal.R.color.materialColorPrimaryFixed)
-+    }
+@@ -50,4 +55,9 @@ object BouncerColors {
+             getColor(NUM_PAD_BACKGROUND)
+         }
+     }
 +
 +    private fun Context.isLockscreenBlurOn(): Boolean {
 +        return com.android.systemui.Flags.enableLockscreenBlur() &&
 +            getSystemService(android.view.WindowManager::class.java)?.isCrossWindowBlurEnabled == true
-     }
++    }
  }

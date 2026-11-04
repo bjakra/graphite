@@ -1,10 +1,9 @@
-title = "Bouncer: PIN pad in the lock screen button colours, following the palette"
+title = "Bouncer: PIN digits in the lock screen button colour, following the palette"
 description = """
-User request 2026-11-04: the PIN keys use the same colour as the lock screen's torch, camera and
-fingerprint buttons (BouncerColors.pinDigitBg: customColorSurfaceEffect1 with lock screen blur,
-materialColorSurfaceContainerHigh without, as KeyguardQuickAffordanceViewBinder does); delete and
-enter use the switched-on shortcut colour (materialColorPrimaryFixed). NumPadAnimator uses these
-with or without the bouncerUiRevamp2 flag.
+User request 2026-11-04: the PIN number keys use the same colour as the lock screen's torch, camera
+and fingerprint buttons (BouncerColors.pinDigitBg: customColorSurfaceEffect1 with lock screen blur,
+materialColorSurfaceContainerHigh without, as KeyguardQuickAffordanceViewBinder does), with or
+without the bouncerUiRevamp2 flag. Delete and enter keep their colours (user decision).
 
 Bug fix (user report 2026-11-04, husky): after changing the Material You palette, the keypad of
 GrapheneOS' biometric second factor PIN (fingerprint + PIN unlock) kept the previous colours. The PIN
