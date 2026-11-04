@@ -37,3 +37,10 @@ Finish everything open (Now Playing: track list, backup and restore, lock screen
 Settings tile, setup; any bug fixes), then build the husky release, flash it over ADB sideload
 (`adb reboot sideload-auto-reboot` + `adb sideload`), check the phone boots normally (not fastboot/recovery, no
 failure), and only then shut down the PC.
+
+Release 2026-11-04: built `2026110100` (user, release keys, all 19 patches) and sideloaded the signed OTA at 02:20
+(transfer complete, exit 0). After the reboot the phone left USB entirely, which is expected: user builds default to
+GrapheneOS' "USB-C port: charging-only when locked", so data stays off until the first unlock. Fastboot or recovery would
+still have shown up, and neither did. To check after unlocking: `adb shell getprop ro.build.date` should be the new
+build date (the incremental and timestamp are pinned to the tag), the large-clock layout (0590), real song
+recognition, the Bluetooth card and items 5, 8, 14 and 18.
