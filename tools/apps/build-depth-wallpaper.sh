@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build Graphite's 3D wallpaper (apps/GraphiteDepthWallpaper) and install it as the ROM prebuilt in
 # src/vendor/graphite/prebuilt/DepthWallpaper/, with a generated privapp allowlist. Soong re-signs it with the
-# platform key. The models (Apache-2.0) aren't in git: they're downloaded here at pinned revisions and checked.
+# platform key. The models (Apache-2.0 and MIT) aren't in git: they're downloaded here at pinned revisions and checked.
 #   tools/apps/build-depth-wallpaper.sh [--no-build]
 set -euo pipefail
 G="$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)"
@@ -11,6 +11,8 @@ BT="$G/sdk/build-tools/37.0.0"
 HF=https://huggingface.co
 DEPTH_REV=4472b7362082ad9968fee890ca0f1e5aca36b93d
 SAM_REV=5850ab45f587c112167512ffef949107115e26a0
+BIREFNET_REV=de15b22ba131738a16dff04aab8bdf8dc32e3ac1
+VITMATTE_REV=6bc1297f6140f055a227b6d2cfe8c093281f35d2
 
 model() {  # file, url, sha256
     local f="$A/models/$1"
@@ -27,6 +29,10 @@ model sam_encoder.onnx "$HF/Xenova/slimsam-77-uniform/resolve/$SAM_REV/onnx/visi
     9f8433273a6750b587779baa0cf5508111001bf7e7acfcf585d370139fd366d0
 model sam_decoder.onnx "$HF/Xenova/slimsam-77-uniform/resolve/$SAM_REV/onnx/prompt_encoder_mask_decoder.onnx" \
     f4514391764fbd56e08e119060d874ecd7d52994bfb1968af159e12d4943b5bb
+model birefnet_lite.onnx "$HF/onnx-community/BiRefNet_lite-ONNX/resolve/$BIREFNET_REV/onnx/model.onnx" \
+    5600024376f572a557870a5eb0afb1e5961636bef4e1e22132025467d0f03333
+model vitmatte_small.onnx "$HF/Xenova/vitmatte-small-composition-1k/resolve/$VITMATTE_REV/onnx/model.onnx" \
+    bf28d2e0be2c073286e88d60ad649d7123da2749a2d99133fd1098d5887e0225
 
 if [[ ${1:-} != --no-build ]]; then
     (cd "$A" && bash ./gradlew --no-daemon :app:assembleRelease)

@@ -38,6 +38,14 @@ every existing toggle has to actually do what it says.
 | 30 | KernelSU-Next: "Failed to grant root" | Kernel, build | | Fixed: the manager's libksud.so was installed as 0644, so it couldn't run ksud. Patch 0003 + config.fs make it 0755 |
 | 31 | Weather clock: At a Glance between time and weather | SystemUI | | Checked on the phone: Google's Weather clock places At a Glance there itself. Kept its layout, but At a Glance no longer repeats the date and alarm the clock shows (0590). Other clocks: At a Glance above the large clock |
 | 32 | Update to GrapheneOS 2026110200 | Build | | Done: all patches unchanged; KernelSU kernel reinstalled (same kernel source as GrapheneOS' rebuild) |
+| 33 | Song recognition still didn't work after the permissions fix | Now Playing | Logs from the phone | Fixed on the emulator, real songs to be checked on the phone: the update window closed after 15 s when the database version was current, which a new install always is, so no songs were ever downloaded ("DB version -1"). It now waits for the download queue, keeps the downloader from being frozen, and the page says when the database is missing and offers it after switching on |
+| 34 | Hide the "Ambient Music Mod running" notification | Now Playing, SystemUI | | Written (patch 0620): Android doesn't let an app hide this itself, so SystemUI filters out that one channel. To be checked on the phone |
+| 35 | At a Glance gone next to the Weather clock; a switch for it | SystemUI, Graphite settings | | Written (patch 0610): Graphite settings, Lock screen, At a Glance, on by default. Weather clock keeps Google's layout (0590). To be checked on the phone |
+| 36 | Second factor PIN keys in old colours | SystemUI | Number keys in the lock screen button colour; delete and enter keep theirs | Written (patch 0630). Not reproduced: the second factor PIN wasn't set up on the emulator, the regular PIN follows the palette there. To be checked on the phone |
+| 37 | Editing a screenshot crashes sometimes | Gallery | | Fixed (patch 0600): the editor drew before its image had loaded. Graphite settings dialogs without a key crashed too, also fixed |
+| 38 | Lawnchair: the Wi-Fi tile was called Internet | Launcher | | Done |
+| 39 | 3D parallax wallpaper with object selection | New app | | Done on the emulator with the real wallpaper: models compared on it, see the app's README. Peak memory (6.9 GB) and analysis time to be checked on the phone. Editor in Wallpaper & style and Graphite settings |
+| 40 | Experimental AMOLED mode for the 3D wallpaper | New app | Menu, off by default, warning | Done on the emulator: colour alone decides, no models run |
 
 ## Plan to the release (user, 2026-11-03)
 

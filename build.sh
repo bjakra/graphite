@@ -206,6 +206,11 @@ do_build() {
         sed -i "s|<string name=\"url\" translatable=\"false\">[^<]*</string>|<string name=\"url\" translatable=\"false\">$UPDATE_URL</string>|" \
             "$SRC_DIR/packages/apps/Updater/res/values/config.xml"
     fi
+    # Too large for the vendor repo, so it's built here when missing (see its Android.bp)
+    if [[ ! -f "$SRC_DIR/vendor/graphite/prebuilt/DepthWallpaper/DepthWallpaper.apk" ]]; then
+        log "building the 3D wallpaper (downloads its models on the first run)"
+        run_logged "$GRAPHITE_ROOT/tools/apps/build-depth-wallpaper.sh" || die "3D wallpaper build failed (log: $BUILD_LOG)"
+    fi
     (( RELEASE )) && new_release_stamp
     log "m -j$jobs $(build_targets)   (log: $BUILD_LOG)"
     local start=$SECONDS
