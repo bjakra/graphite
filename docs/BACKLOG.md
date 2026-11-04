@@ -65,3 +65,22 @@ Release 2026-11-04 (second): `2026110400` on GrapheneOS 2026110200 with items 25
 `src/releases/2026110400/release-husky-2026110400/husky-ota_update-2026110400.zip` (`adb reboot sideload-auto-reboot`, then
 `adb sideload` it). Checked in the release: new fingerprint and timestamp, libksud.so 0755, KernelSU kernel. After installing,
 check Now Playing (Graphite settings, recognise now), the headphones card, the drawer colour and KernelSU root.
+
+## Now Playing recognition, 2026-11-04 (in the sources, needs the next build)
+
+The phone only had the built-in core (15,943 songs, one Carti track). Measured on the emulator: Germany alone gives 81,561
+songs, Germany + US + UK 151,394, with France 188,001. Each country is about 230 MB. Google's 3188 is the newest database.
+
+Fixed and tested on the emulator: update window closing before the songs downloaded, added countries ignored until the engine
+restarted, engine crash from too many scheduled jobs, core killed by the network grant, out of memory with several countries.
+Added and tested there: US as a default extra country, up to four extras, country picker at setup, Live Update progress.
+
+Still to check on the phone after flashing, because the emulator has no real microphone:
+
+* Byte order fix and automatic gain: compare recognition of loud and quiet songs. `ProxyAudioRecord` logs the gain per capture.
+* Microphone hint: the emulator image predates patch 0550, so the hint itself hasn't been seen yet.
+* Matching time with several countries (`fingerprint_matcher.cc: Match results (in N ms)`).
+* The little core setting pins to CPUs 0-3 (mask 0xF in libsense), the little cluster on Tensor G3. It stays off and was never
+  measured on the phone.
+
+Known cost: the core keeps the song list in memory after a database search (about 180 MB with four countries).
