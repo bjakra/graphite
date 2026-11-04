@@ -38,12 +38,12 @@ every existing toggle has to actually do what it says.
 | 30 | KernelSU-Next: "Failed to grant root" | Kernel, build | | Fixed: the manager's libksud.so was installed as 0644, so it couldn't run ksud. Patch 0003 + config.fs make it 0755 |
 | 31 | Weather clock: At a Glance between time and weather | SystemUI | | Checked on the phone: Google's Weather clock places At a Glance there itself. Kept its layout, but At a Glance no longer repeats the date and alarm the clock shows (0590). Other clocks: At a Glance above the large clock |
 | 32 | Update to GrapheneOS 2026110200 | Build | | Done: all patches unchanged; KernelSU kernel reinstalled (same kernel source as GrapheneOS' rebuild) |
-| 33 | Song recognition still didn't work after the permissions fix | Now Playing | Logs from the phone | Not fixed yet: the update window now stays open and the downloader stays alive, but after the update on the phone the engine still reports no database ("DB version -1"). Being investigated |
-| 34 | Hide the "Ambient Music Mod running" notification | Now Playing, SystemUI | | Written (patch 0620): Android doesn't let an app hide this itself, so SystemUI filters out that one channel. To be checked on the phone |
-| 35 | At a Glance gone next to the Weather clock; a switch for it | SystemUI, Graphite settings | | Written (patch 0610): Graphite settings, Lock screen, At a Glance, on by default. Weather clock keeps Google's layout (0590). To be checked on the phone |
-| 36 | Second factor PIN keys in old colours | SystemUI | Number keys in the lock screen button colour; delete and enter keep theirs | Written (patch 0630). Not reproduced: the second factor PIN wasn't set up on the emulator, the regular PIN follows the palette there. To be checked on the phone |
-| 37 | Editing a screenshot crashes sometimes | Gallery | | Fixed (patch 0600): the editor drew before its image had loaded. Graphite settings dialogs without a key crashed too, also fixed |
-| 38 | Lawnchair: the Wi-Fi tile was called Internet | Launcher | | Done |
+| 33 | Song recognition still didn't work after the permissions fix | Now Playing | Logs from the phone | Done: the update window fix got the database onto the phone (3188, about 17k songs). The remaining silence was the phone's system-wide Microphone access toggle being off, not a bug |
+| 34 | Hide the "Ambient Music Mod running" notification | Now Playing, SystemUI | | Done: confirmed on the phone |
+| 35 | At a Glance gone next to the Weather clock; a switch for it | SystemUI, Graphite settings | | Done: confirmed on the phone |
+| 36 | Second factor PIN keys in old colours | SystemUI | Number keys in the lock screen button colour; delete and enter keep theirs | Done: confirmed on the phone |
+| 37 | Editing a screenshot crashes sometimes | Gallery | | Done: confirmed on the phone |
+| 38 | Lawnchair: the Wi-Fi tile was called Internet | Launcher | | Done: confirmed on the phone |
 | 39 | 3D parallax wallpaper with object selection | New app | | Dropped (user decision, 2026-11-04): not their thing. Archived with its ROM integration in the private repo graphite_depth_wallpaper |
 | 40 | Experimental AMOLED mode for the 3D wallpaper | New app | Menu, off by default, warning | Dropped with the wallpaper, in the same archive |
 
