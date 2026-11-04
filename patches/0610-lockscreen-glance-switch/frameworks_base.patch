@@ -67,7 +67,7 @@ index b5d0cd8fe5c6162d9a800764b9f38533b7578450..ea3a050ad8a2c9c979e6c13636230350
 +        super.onDetachedFromWindow();
 +    }
 +
-+    private boolean isEnabled() {
++    private boolean isShownOnLockscreen() {
 +        return Settings.Secure.getIntForUser(mContext.getContentResolver(), SETTING_SHOW, 1,
 +                UserHandle.USER_CURRENT) != 0;
 +    }
@@ -79,7 +79,7 @@ index b5d0cd8fe5c6162d9a800764b9f38533b7578450..ea3a050ad8a2c9c979e6c13636230350
  
 -        if (subTemplates.isEmpty()) {
 +        // Graphite: hidden on the lock screen and AOD when switched off in Graphite settings
-+        if (subTemplates.isEmpty() || !isEnabled()) {
++        if (subTemplates.isEmpty() || !isShownOnLockscreen()) {
              mRows.setVisibility(View.GONE);
              return;
          }
