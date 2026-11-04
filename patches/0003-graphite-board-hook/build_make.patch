@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 07:59:29 +0100
+Subject: [PATCH] Graphite: include vendor/graphite board configuration
+
+Board variables such as TARGET_FS_CONFIG_GEN can only be set from board config. Every Pixel
+includes BoardConfigPixelCommon.mk, so Graphite's BoardConfig.mk is included from there.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ target/board/BoardConfigPixelCommon.mk | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/target/board/BoardConfigPixelCommon.mk b/target/board/BoardConfigPixelCommon.mk
+index 22521b5ee2a462a62823f4ec6dc15eb5894d1765..6ee80c0f2f9c887760d90dbfca07a614441150ee 100644
+--- a/target/board/BoardConfigPixelCommon.mk
++++ b/target/board/BoardConfigPixelCommon.mk
+@@ -17,3 +17,6 @@ BOARD_AVB_ODM_ADD_HASHTREE_FOOTER_ARGS += --hash_algorithm sha256
+ # vendor_dlkm and odm_dlkm.
+ BOARD_AVB_VENDOR_DLKM_ADD_HASHTREE_FOOTER_ARGS += --hash_algorithm sha256
+ BOARD_AVB_ODM_DLKM_ADD_HASHTREE_FOOTER_ARGS += --hash_algorithm sha256
++
++# Graphite: board configuration (vendor/graphite/config/BoardConfig.mk), e.g. config.fs file modes
++-include vendor/graphite/config/BoardConfig.mk

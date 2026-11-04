@@ -1,0 +1,27 @@
+title = "Include Graphite's board configuration (vendor/graphite)"
+description = """
+Makes BoardConfigPixelCommon.mk (included by every Pixel's board config) include
+vendor/graphite/config/BoardConfig.mk, the board-level counterpart of patch 0002. Board variables
+such as TARGET_FS_CONFIG_GEN can only be set there, not in product makefiles.
+
+Graphite uses it for config.fs (file modes in the images): the preinstalled KernelSU-Next manager
+runs its daemon from /system_ext/app/GraphiteKernelSUNext/lib/arm64/libksud.so, which the build
+installs as 0644 like every app file. Without the execute bit the manager can't start ksud, never
+gets root and shows "Failed to grant root". config.fs makes that one file 0755 (root:root). This
+doesn't change any GrapheneOS security feature: root itself still needs the KernelSU kernel and
+the manager, and it's still granted per app in the manager.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "The KernelSU-Next manager can't get root (\"Failed to grant root\"), so root management and modules don't work. Everything else is unaffected."
+category = "branding"
+depends = ["0002-graphite-vendor-hook"]
+enabled = true
+notes = "-include keeps builds working without vendor/graphite. The hook is in build/make, so it reaches all Pixels but not the emulator (which doesn't ship KernelSU)."
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0003-graphite-board-hook --project <path> --new
+
+[[change]]
+project = "build/make"
+file = "build_make.patch"

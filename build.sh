@@ -174,6 +174,24 @@ build_targets() {
     if (( RELEASE )); then echo "vendorbootimage vendorkernelbootimage target-files-package otatools-package"
     else echo ""; fi   # plain 'm' = default target (flashable images)
 }
+# Every release gets its own build date and number (YYYYMMDDNN, NN counts releases of the day). GrapheneOS'
+# envsetup.sh otherwise reuses the first build's date from out/build_date.txt, and with an unchanged fingerprint
+# Android doesn't treat the OTA as an upgrade: no default permission grants for new apps, stale package cache, no
+# boot dexopt, and recovery only accepts it because the timestamp is equal.
+new_release_stamp() {
+    local day n=0 num
+    day=$(date -u +%Y%m%d)
+    num="${day}00"
+    while [[ -e "$SRC_DIR/releases/$num" ]]; do
+        n=$((n + 1)); (( n <= 99 )) || die "more than 100 releases on $day"
+        num="$day$(printf %02d $n)"
+    done
+    mkdir -p "$SRC_DIR/$DEVICE_OUT_DIR/soong"
+    date -u +%s > "$SRC_DIR/$DEVICE_OUT_DIR/build_date.txt"
+    printf %s "$num" > "$SRC_DIR/$DEVICE_OUT_DIR/soong/build_number.txt"
+    log "release build number $num"
+}
+
 do_build() {
     step "build $TARGET"
     [[ -d "$SRC_DIR/vendor/google_devices/$DEVICE" ]] || die "vendor files missing — run the vendor step"
@@ -188,6 +206,7 @@ do_build() {
         sed -i "s|<string name=\"url\" translatable=\"false\">[^<]*</string>|<string name=\"url\" translatable=\"false\">$UPDATE_URL</string>|" \
             "$SRC_DIR/packages/apps/Updater/res/values/config.xml"
     fi
+    (( RELEASE )) && new_release_stamp
     log "m -j$jobs $(build_targets)   (log: $BUILD_LOG)"
     local start=$SECONDS
     if ! run_logged in_build_env "$TARGET" "$DEVICE_OUT_DIR" "$extra $(nice_cmd) m -j$jobs $(build_targets)"; then
