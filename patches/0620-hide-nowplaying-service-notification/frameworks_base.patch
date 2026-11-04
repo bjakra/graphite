@@ -1,0 +1,101 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 14:41:40 +0100
+Subject: [PATCH] SystemUI: hide Graphite Now Playing's background service
+ notification
+
+Android raises a blocked foreground service channel back to low importance, so the service can't
+hide its notification itself. A notification filter hides only that channel of org.graphite.nowplaying.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../GraphiteServiceNotifsCoordinator.java     | 59 +++++++++++++++++++
+ .../coordinator/NotifCoordinators.kt          |  2 +
+ 2 files changed, 61 insertions(+)
+ create mode 100644 packages/SystemUI/src/com/android/systemui/statusbar/notification/collection/coordinator/GraphiteServiceNotifsCoordinator.java
+
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/notification/collection/coordinator/GraphiteServiceNotifsCoordinator.java b/packages/SystemUI/src/com/android/systemui/statusbar/notification/collection/coordinator/GraphiteServiceNotifsCoordinator.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..fb05e547af6d47a2ee94446f48b8cbca6391505e
+--- /dev/null
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/notification/collection/coordinator/GraphiteServiceNotifsCoordinator.java
+@@ -0,0 +1,59 @@
++/*
++ * Copyright (C) 2026 Graphite
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.systemui.statusbar.notification.collection.coordinator;
++
++import android.app.Notification;
++import android.service.notification.StatusBarNotification;
++
++import com.android.systemui.statusbar.notification.collection.NotifPipeline;
++import com.android.systemui.statusbar.notification.collection.NotificationEntry;
++import com.android.systemui.statusbar.notification.collection.coordinator.dagger.CoordinatorScope;
++import com.android.systemui.statusbar.notification.collection.listbuilder.pluggable.NotifFilter;
++
++import javax.inject.Inject;
++
++/**
++ * Graphite: hides the "running in the background" notification of Graphite's own system services.
++ * Now Playing is turned on and off in Graphite settings, and an app can't hide its own foreground
++ * service notification (Android raises a blocked channel back to low importance). Only that one
++ * channel is hidden; the service's other notifications (recognised songs, errors) still show.
++ */
++@CoordinatorScope
++public class GraphiteServiceNotifsCoordinator implements Coordinator {
++
++    private static final String NOW_PLAYING = "org.graphite.nowplaying";
++    private static final String NOW_PLAYING_SERVICE_CHANNEL = "graphite_background_service";
++
++    @Inject
++    GraphiteServiceNotifsCoordinator() { }
++
++    @Override
++    public void attach(NotifPipeline pipeline) {
++        pipeline.addPreGroupFilter(mFilter);
++    }
++
++    private final NotifFilter mFilter = new NotifFilter("GraphiteServiceNotifsFilter") {
++        @Override
++        public boolean shouldFilterOut(NotificationEntry entry, long now) {
++            StatusBarNotification sbn = entry.getSbn();
++            Notification n = sbn.getNotification();
++            return NOW_PLAYING.equals(sbn.getPackageName())
++                    && (n.flags & Notification.FLAG_FOREGROUND_SERVICE) != 0
++                    && NOW_PLAYING_SERVICE_CHANNEL.equals(n.getChannelId());
++        }
++    };
++}
+diff --git a/packages/SystemUI/src/com/android/systemui/statusbar/notification/collection/coordinator/NotifCoordinators.kt b/packages/SystemUI/src/com/android/systemui/statusbar/notification/collection/coordinator/NotifCoordinators.kt
+index 7295df17c64bbea7fde88629c22f26edadbf2390..4fdd09a1cda2ca4e22e5a128b7a1bf6ead891b3f 100644
+--- a/packages/SystemUI/src/com/android/systemui/statusbar/notification/collection/coordinator/NotifCoordinators.kt
++++ b/packages/SystemUI/src/com/android/systemui/statusbar/notification/collection/coordinator/NotifCoordinators.kt
+@@ -39,6 +39,7 @@ class NotifCoordinatorsImpl
+ constructor(
+     sectionStyleProvider: SectionStyleProvider,
+     hideLocallyDismissedNotifsCoordinator: HideLocallyDismissedNotifsCoordinator,
++    graphiteServiceNotifsCoordinator: GraphiteServiceNotifsCoordinator,
+     hideNotifsForOtherUsersCoordinator: HideNotifsForOtherUsersCoordinator,
+     keyguardCoordinator: KeyguardCoordinator,
+     unseenKeyguardCoordinator: OriginalUnseenKeyguardCoordinator,
+@@ -80,6 +81,7 @@ constructor(
+     init {
+         // Attach normal coordinators.
+         mCoordinators.add(hideLocallyDismissedNotifsCoordinator)
++        mCoordinators.add(graphiteServiceNotifsCoordinator)
+         mCoordinators.add(hideNotifsForOtherUsersCoordinator)
+         mCoordinators.add(keyguardCoordinator)
+         if (NotificationMinimalism.isEnabled) {

@@ -1,0 +1,33 @@
+title = "Bouncer: PIN pad in the lock screen button colours, following the palette"
+description = """
+User request 2026-11-04: the PIN keys use the same colour as the lock screen's torch, camera and
+fingerprint buttons (BouncerColors.pinDigitBg: customColorSurfaceEffect1 with lock screen blur,
+materialColorSurfaceContainerHigh without, as KeyguardQuickAffordanceViewBinder does); delete and
+enter use the switched-on shortcut colour (materialColorPrimaryFixed). NumPadAnimator uses these
+with or without the bouncerUiRevamp2 flag.
+
+Bug fix (user report 2026-11-04, husky): after changing the Material You palette, the keypad of
+GrapheneOS' biometric second factor PIN (fingerprint + PIN unlock) kept the previous colours. The PIN
+pad reads its colours only at inflation (KeyguardPinBasedInputView.reloadColors from
+onFinishInflate), and the second factor PIN view is preloaded and kept next to the primary one.
+KeyguardPinBasedInputViewController.onResume now reloads the keypad colours every time a PIN view is
+shown, and KeyguardSecurityContainerController's theme/ui mode change handler also reloads every
+inflated security view (KeyguardSecurityViewFlipperController.reloadColors through
+KeyguardInputViewController.reloadColors), not only the container. The regular PIN bouncer already
+followed palette changes on the emulator; this makes every PIN view do it regardless of when it was
+inflated.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "The second factor PIN keypad can keep the previous Material You colours after a palette change."
+category = "fix"
+depends = []
+enabled = true
+notes = "Not reproduced on the emulator (second factor setup needs fingerprint enrolment there); to be checked on the phone."
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0630-bouncer-pin-colors --project <path> --new
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"

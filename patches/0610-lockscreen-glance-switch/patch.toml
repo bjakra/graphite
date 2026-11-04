@@ -1,0 +1,22 @@
+title = "Lock screen: switch to show or hide At a Glance"
+description = """
+User request 2026-11-04: a switch in Graphite settings (Lock screen, At a Glance) to show or hide
+At a Glance on the lock screen and AOD. GrapheneOS draws At a Glance with
+LockscreenSmartspaceGeneralView (date, next alarm, Do Not Disturb, media); it now reads
+Settings.Secure graphite_lockscreen_at_a_glance (default 1 = shown) and hides its rows when it's 0,
+updating as soon as the setting changes. The switch itself is in GraphiteParts (LockScreenFragment).
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "The At a Glance switch in Graphite settings has no effect; At a Glance always shows on the lock screen."
+category = "feature"
+depends = ["0590-lockscreen-large-clock-layout"]
+enabled = true
+notes = "Depends on 0590 only for patch order (both touch the lock screen smartspace)."
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0610-lockscreen-glance-switch --project <path> --new
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"

@@ -8,15 +8,12 @@ where the small clock would be, and ClockSection anchors the large clock below A
 
 Clocks with their own date and weather (hasCustomWeatherDataDisplay, Google's Weather clock) place At a Glance
 themselves: the Weather clock deliberately puts it between its time and its weather (its own barrier
-weather_clock_bc_smartspace_bottom), so their layout is left alone. What differed from Pixels there was the
-content: GrapheneOS' At a Glance (SystemUISmartspaceService + LockscreenSmartspaceGeneralView) repeated the date
-and next alarm the clock already shows. Those rows are now tagged (SubItemLoggingInfo instance ids) and left out
-while such a large clock is on screen; Do Not Disturb and media rows stay. The small clock layout and the
-"date below the large clock" layout are unchanged.
+weather_clock_bc_smartspace_bottom), so their layout is left alone. The small clock layout and the "date below the
+large clock" layout are unchanged. Hiding At a Glance is patch 0610's switch.
 """
 # false = the ROM still builds and works without it; build.sh may skip it on failure
 required = false
-skip_impact = "At a Glance can overlap large lock screen clocks, and next to the Weather clock it repeats the date and alarm the clock already shows."
+skip_impact = "At a Glance can overlap large lock screen clocks without their own date and weather."
 category = "fix"
 depends = []
 enabled = true

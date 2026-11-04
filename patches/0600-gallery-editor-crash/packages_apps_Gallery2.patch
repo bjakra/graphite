@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 14:02:23 +0100
+Subject: [PATCH] Gallery2: don't crash when the editor draws before the image
+ is loaded
+
+Editing a screenshot right away opened the photo editor, whose first draw could run before the
+image bounds were known: NullPointerException in PrimaryImage.setImageShowSize.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../android/gallery3d/filtershow/imageshow/PrimaryImage.java | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/src/com/android/gallery3d/filtershow/imageshow/PrimaryImage.java b/src/com/android/gallery3d/filtershow/imageshow/PrimaryImage.java
+index 33e82b00d469daa2abdb101f26bf3125fe330ac0..e37697112dccfe70f98c5bfbc762150381361ecd 100644
+--- a/src/com/android/gallery3d/filtershow/imageshow/PrimaryImage.java
++++ b/src/com/android/gallery3d/filtershow/imageshow/PrimaryImage.java
+@@ -554,6 +554,11 @@ public class PrimaryImage implements RenderingRequestCaller {
+     }
+ 
+     public void setImageShowSize(int w, int h) {
++        // Graphite: the editor can draw before the image is loaded (seen when editing a screenshot
++        // right away); the size is set by the next draw once the bounds are known
++        if (mOriginalBounds == null) {
++            return;
++        }
+         if (mImageShowSize.x != w || mImageShowSize.y != h) {
+             mImageShowSize.set(w, h);
+             float maxWidth = mOriginalBounds.width() / (float) w;

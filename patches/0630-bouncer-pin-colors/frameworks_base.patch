@@ -1,0 +1,156 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 14:47:16 +0100
+Subject: [PATCH] SystemUI: PIN pad in the lock screen's button colours,
+ following the palette
+
+- The keys take the colour of the lock screen's torch, camera and fingerprint buttons (surface
+  effect 1 with blur, surface container high without); delete and enter the colour of a switched-on
+  shortcut (primary fixed). Before, they used a separate keypad colour that looked blue next to the
+  lock screen.
+- The keypad colours were only read at inflation. The biometric second factor PIN view is preloaded
+  and kept, so after a Material You change it could keep the previous palette. PIN views now reload
+  their colours whenever they're shown, and a theme change reloads every inflated security view.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../keyguard/KeyguardInputViewController.java |  7 ++++++
+ .../KeyguardPinBasedInputViewController.java  |  3 +++
+ .../KeyguardSecurityContainerController.java  |  3 +++
+ ...KeyguardSecurityViewFlipperController.java |  7 ++++++
+ .../com/android/keyguard/NumPadAnimator.java  | 16 ++++---------
+ .../systemui/bouncer/ui/BouncerColors.kt      | 23 ++++++++++++-------
+ 6 files changed, 39 insertions(+), 20 deletions(-)
+
+diff --git a/packages/SystemUI/src/com/android/keyguard/KeyguardInputViewController.java b/packages/SystemUI/src/com/android/keyguard/KeyguardInputViewController.java
+index 9ebe2f8c4c1dc876789d96ce9eb1deb538afcf8e..3ac8979ddfe69f5ad07514390e2cd379bc5f81da 100644
+--- a/packages/SystemUI/src/com/android/keyguard/KeyguardInputViewController.java
++++ b/packages/SystemUI/src/com/android/keyguard/KeyguardInputViewController.java
+@@ -153,6 +153,13 @@ public abstract class KeyguardInputViewController<T extends KeyguardInputView>
+         return mKeyguardSecurityCallback;
+     }
+ 
++    /** Graphite: takes the keypad colours from the current theme (PIN views). */
++    public void reloadColors() {
++        if (mView instanceof KeyguardPinBasedInputView pinView) {
++            pinView.reloadColors();
++        }
++    }
++
+     @Override
+     public void reset() {
+         if (mMessageAreaController == null) return;
+diff --git a/packages/SystemUI/src/com/android/keyguard/KeyguardPinBasedInputViewController.java b/packages/SystemUI/src/com/android/keyguard/KeyguardPinBasedInputViewController.java
+index 1d017fcbe25133be44a1f01b24c54fe7f5ada09e..f0d5340bfebbd394485dfa86f596f69b91e0752f 100644
+--- a/packages/SystemUI/src/com/android/keyguard/KeyguardPinBasedInputViewController.java
++++ b/packages/SystemUI/src/com/android/keyguard/KeyguardPinBasedInputViewController.java
+@@ -275,6 +275,9 @@ public abstract class KeyguardPinBasedInputViewController<T extends KeyguardPinB
+     @Override
+     public void onResume(int reason) {
+         super.onResume(reason);
++        // Graphite: a PIN view can outlive a Material You palette change (the biometric second factor
++        // PIN is preloaded and kept), so take the keypad colours from the current theme whenever shown
++        mView.reloadColors();
+         // This also restores focusability disabled during inflation.
+         mPasswordEntry.setFocusableInTouchMode(true);
+         // It's possible to reach a state here where mPasswordEntry believes it is focused
+diff --git a/packages/SystemUI/src/com/android/keyguard/KeyguardSecurityContainerController.java b/packages/SystemUI/src/com/android/keyguard/KeyguardSecurityContainerController.java
+index 74faef905c0fbf22b382b1e621ec1da1ec2f7432..e9fbd7c1ee65e7aca5e935f6693c7f9e2ad15fab 100644
+--- a/packages/SystemUI/src/com/android/keyguard/KeyguardSecurityContainerController.java
++++ b/packages/SystemUI/src/com/android/keyguard/KeyguardSecurityContainerController.java
+@@ -1432,6 +1432,9 @@ public class KeyguardSecurityContainerController extends ViewController<Keyguard
+ 
+     private void reloadColors() {
+         mView.reloadColors();
++        // Graphite: also the inflated security views, including hidden ones (the preloaded biometric
++        // second factor PIN), so none keeps the previous palette
++        mSecurityViewFlipperController.reloadColors();
+     }
+ 
+     public void setBouncerBindMessageViewCallback(
+diff --git a/packages/SystemUI/src/com/android/keyguard/KeyguardSecurityViewFlipperController.java b/packages/SystemUI/src/com/android/keyguard/KeyguardSecurityViewFlipperController.java
+index 05632b6131d9da95bac2f90b6db378d0251068c6..3fbbd0db4367bc31abaa8bd79031c22bfbd3a252 100644
+--- a/packages/SystemUI/src/com/android/keyguard/KeyguardSecurityViewFlipperController.java
++++ b/packages/SystemUI/src/com/android/keyguard/KeyguardSecurityViewFlipperController.java
+@@ -110,6 +110,13 @@ public class KeyguardSecurityViewFlipperController
+         }
+     }
+ 
++    /** Graphite: reloads the colours of every inflated PIN view after a theme change. */
++    public void reloadColors() {
++        for (KeyguardInputViewController<KeyguardInputView> child : mChildren) {
++            child.reloadColors();
++        }
++    }
++
+     /** Handles density or font scale changes. */
+     public void clearViews() {
+         mOnViewInflatedListeners.clear();
+diff --git a/packages/SystemUI/src/com/android/keyguard/NumPadAnimator.java b/packages/SystemUI/src/com/android/keyguard/NumPadAnimator.java
+index 0d246b5247768429c67dbbda6d027870c988e963..c38b2a4cf4a2c541831bf3bb598f39dbf1baa1bb 100644
+--- a/packages/SystemUI/src/com/android/keyguard/NumPadAnimator.java
++++ b/packages/SystemUI/src/com/android/keyguard/NumPadAnimator.java
+@@ -160,18 +160,10 @@ class NumPadAnimator {
+     void reloadColors(Context context) {
+         boolean isNumPadKey = mImageButton == null;
+ 
+-        if (!Flags.bouncerUiRevamp2()) {
+-            int[] customAttrs = {android.R.attr.colorControlNormal};
+-            ContextThemeWrapper ctw = new ContextThemeWrapper(context, mStyle);
+-            @SuppressLint("ResourceType") TypedArray a = ctw.obtainStyledAttributes(customAttrs);
+-
+-            mNormalBackgroundColor = a.getColor(0, context.getColor(NUM_PAD_BACKGROUND));
+-
+-            a.recycle();
+-        } else {
+-            mNormalBackgroundColor = isNumPadKey ? BouncerColors.pinDigitBg(context)
+-                            : BouncerColors.pinActionBg(context);
+-        }
++        // Graphite: always the lock screen shortcut colours (BouncerColors), with or without the
++        // bouncer revamp flag, so the keypad matches the lock screen in every palette
++        mNormalBackgroundColor = isNumPadKey ? BouncerColors.pinDigitBg(context)
++                        : BouncerColors.pinActionBg(context);
+ 
+         mPressedBackgroundColor = context.getColor(Color.bgPressed);
+         mTextColorPressed = context.getColor(Color.digitPressed);
+diff --git a/packages/SystemUI/src/com/android/systemui/bouncer/ui/BouncerColors.kt b/packages/SystemUI/src/com/android/systemui/bouncer/ui/BouncerColors.kt
+index 719893299ece32cd4be37aa6bc99485ad9b18e24..0fc9f6eac34152400b5d695fa7a02e81271ebbf1 100644
+--- a/packages/SystemUI/src/com/android/systemui/bouncer/ui/BouncerColors.kt
++++ b/packages/SystemUI/src/com/android/systemui/bouncer/ui/BouncerColors.kt
+@@ -33,21 +33,28 @@ object BouncerColors {
+         }
+     }
+ 
++    /**
++     * Graphite: the PIN keys use the same colour as the lock screen's torch, camera and fingerprint
++     * buttons (KeyguardQuickAffordanceViewBinder, DeviceEntryBackgroundViewModel), so the keypad
++     * matches the lock screen in every palette.
++     */
+     @JvmStatic
+     fun Context.pinDigitBg(): Int {
+-        return if (Flags.bouncerUiRevamp() && Flags.bouncerUiRevamp2()) {
+-            return SurfaceEffectColors.surfaceEffect1(context = this)
++        return if (isLockscreenBlurOn()) {
++            SurfaceEffectColors.surfaceEffect1(context = this)
+         } else {
+-            getColor(NUM_PAD_BACKGROUND)
++            getColor(com.android.internal.R.color.materialColorSurfaceContainerHigh)
+         }
+     }
+ 
++    /** Graphite: delete and enter take the colour of a switched-on lock screen shortcut. */
+     @JvmStatic
+     fun Context.pinActionBg(): Int {
+-        return if (Flags.bouncerUiRevamp() && Flags.bouncerUiRevamp2()) {
+-            return getColor(color.pin_bouncer_action_button_bg)
+-        } else {
+-            getColor(NUM_PAD_BACKGROUND)
+-        }
++        return getColor(com.android.internal.R.color.materialColorPrimaryFixed)
++    }
++
++    private fun Context.isLockscreenBlurOn(): Boolean {
++        return com.android.systemui.Flags.enableLockscreenBlur() &&
++            getSystemService(android.view.WindowManager::class.java)?.isCrossWindowBlurEnabled == true
+     }
+ }

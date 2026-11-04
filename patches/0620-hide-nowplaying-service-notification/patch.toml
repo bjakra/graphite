@@ -1,0 +1,26 @@
+title = "SystemUI: hide Now Playing's background service notification"
+description = """
+User request 2026-11-04: hide the "Ambient Music Mod, running in the background" notification of
+Graphite Now Playing (org.graphite.nowplaying). Its service needs to be a foreground service to
+listen, and an app can't hide its own foreground service notification: Android raises a channel
+created blocked back to low importance. A new notification coordinator
+(GraphiteServiceNotifsCoordinator, registered in NotifCoordinators) filters out only the foreground
+service notification on that app's "graphite_background_service" channel. Its other notifications
+(recognised songs, errors) still show. Now Playing is switched on and off in Graphite settings, its
+microphone use doesn't show an indicator (hotword source) and patch 0460 keeps it out of active apps,
+so this hides the last place where the running service shows. It only affects that one package.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "A silent 'Ambient Music Mod, running in the background' notification shows while Now Playing is on."
+category = "feature"
+depends = ["0460-active-apps-hide-parts"]
+enabled = true
+notes = "The channel id is set in the AMM fork (components/notifications/Notifications.kt)."
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0620-hide-nowplaying-service-notification --project <path> --new
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"

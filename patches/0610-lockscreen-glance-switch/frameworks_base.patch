@@ -1,0 +1,85 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 14:03:42 +0100
+Subject: [PATCH] SystemUI: switch to show or hide At a Glance on the lock
+ screen
+
+LockscreenSmartspaceGeneralView reads Settings.Secure graphite_lockscreen_at_a_glance (default on,
+set in Graphite settings, Lock screen) and hides its rows when it's off.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../LockscreenSmartspaceGeneralView.java      | 39 ++++++++++++++++++-
+ 1 file changed, 38 insertions(+), 1 deletion(-)
+
+diff --git a/packages/SystemUI/src/com/android/systemui/keyguard/smartspace/LockscreenSmartspaceGeneralView.java b/packages/SystemUI/src/com/android/systemui/keyguard/smartspace/LockscreenSmartspaceGeneralView.java
+index b5d0cd8fe5c6162d9a800764b9f38533b7578450..ea3a050ad8a2c9c979e6c1363623035008a71854 100644
+--- a/packages/SystemUI/src/com/android/systemui/keyguard/smartspace/LockscreenSmartspaceGeneralView.java
++++ b/packages/SystemUI/src/com/android/systemui/keyguard/smartspace/LockscreenSmartspaceGeneralView.java
+@@ -7,9 +7,14 @@ import android.app.smartspace.uitemplatedata.CombinedCardsTemplateData;
+ import android.app.smartspace.uitemplatedata.Icon;
+ import android.app.smartspace.uitemplatedata.Text;
+ import android.content.Context;
++import android.database.ContentObserver;
+ import android.graphics.Color;
+ import android.graphics.drawable.Drawable;
+ import android.graphics.drawable.InsetDrawable;
++import android.os.Handler;
++import android.os.Looper;
++import android.os.UserHandle;
++import android.provider.Settings;
+ import android.text.TextUtils;
+ import android.util.AttributeSet;
+ import android.view.View;
+@@ -33,6 +38,17 @@ public class LockscreenSmartspaceGeneralView extends LinearLayout implements Def
+     private Rows mRows;
+     private final int mIconSize;
+ 
++    /** Graphite: switch in Graphite settings, Lock screen, At a Glance (default on). */
++    public static final String SETTING_SHOW = "graphite_lockscreen_at_a_glance";
++    private SmartspaceTarget mTarget;
++    private final ContentObserver mSettingObserver = new ContentObserver(
++            new Handler(Looper.getMainLooper())) {
++        @Override
++        public void onChange(boolean selfChange) {
++            if (mTarget != null) showTarget(mTarget);
++        }
++    };
++
+     public LockscreenSmartspaceGeneralView(Context context, AttributeSet attrs) {
+         super(context, attrs);
+ 
+@@ -45,11 +61,32 @@ public class LockscreenSmartspaceGeneralView extends LinearLayout implements Def
+         mRows = findViewById(R.id.rows);
+     }
+ 
++    @Override
++    protected void onAttachedToWindow() {
++        super.onAttachedToWindow();
++        mContext.getContentResolver().registerContentObserver(
++                Settings.Secure.getUriFor(SETTING_SHOW), false, mSettingObserver, UserHandle.USER_ALL);
++        if (mTarget != null) showTarget(mTarget);
++    }
++
++    @Override
++    protected void onDetachedFromWindow() {
++        mContext.getContentResolver().unregisterContentObserver(mSettingObserver);
++        super.onDetachedFromWindow();
++    }
++
++    private boolean isEnabled() {
++        return Settings.Secure.getIntForUser(mContext.getContentResolver(), SETTING_SHOW, 1,
++                UserHandle.USER_CURRENT) != 0;
++    }
++
+     protected void showTarget(SmartspaceTarget target) {
++        mTarget = target;
+         var template = (CombinedCardsTemplateData) requireNonNull(target.getTemplateData());
+         List<BaseTemplateData> subTemplates = template.getCombinedCardDataList();
+ 
+-        if (subTemplates.isEmpty()) {
++        // Graphite: hidden on the lock screen and AOD when switched off in Graphite settings
++        if (subTemplates.isEmpty() || !isEnabled()) {
+             mRows.setVisibility(View.GONE);
+             return;
+         }

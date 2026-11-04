@@ -94,72 +94,18 @@ index 87091b58134af90c5262643ded0d9dc1f281a814..cccb645fa954f50690c6675183361214
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Bjarne <87858321+bjakra@users.noreply.github.com>
 Date: Wed, 4 Nov 2026 08:07:17 +0100
-Subject: [PATCH] SystemUI: keep the Weather clock's own layout, without
- duplicate date and alarm
+Subject: [PATCH] SystemUI: keep the Weather clock's own layout
 
 Google's Weather clock places At a Glance between its time and its weather itself (barrier
-weather_clock_bc_smartspace_bottom), so re-anchoring it doesn't apply to clocks with their own date
-and weather. What differed from Pixels was the content: GrapheneOS' At a Glance repeated the date
-and next alarm that the clock already shows. Those two rows are now tagged and left out while such
-a large clock is on screen. Other clocks keep At a Glance above the large clock.
+weather_clock_bc_smartspace_bottom), so At a Glance and the large clock are only re-anchored for
+clocks without their own date and weather.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- .../LockscreenSmartspaceGeneralView.java      | 28 ++++++++++-
- .../ui/view/layout/sections/ClockSection.kt   |  5 +-
- .../view/layout/sections/SmartspaceSection.kt | 48 +++++++++----------
- .../service/SystemUISmartspaceService.java    |  8 ++++
- 4 files changed, 61 insertions(+), 28 deletions(-)
+ .../ui/view/layout/sections/ClockSection.kt   |  5 ++-
+ .../view/layout/sections/SmartspaceSection.kt | 45 ++++++++-----------
+ 2 files changed, 23 insertions(+), 27 deletions(-)
 
-diff --git a/packages/SystemUI/src/com/android/systemui/keyguard/smartspace/LockscreenSmartspaceGeneralView.java b/packages/SystemUI/src/com/android/systemui/keyguard/smartspace/LockscreenSmartspaceGeneralView.java
-index b5d0cd8fe5c6162d9a800764b9f38533b7578450..38b003c6950e95b40926f7681c8fabbb445d1e09 100644
---- a/packages/SystemUI/src/com/android/systemui/keyguard/smartspace/LockscreenSmartspaceGeneralView.java
-+++ b/packages/SystemUI/src/com/android/systemui/keyguard/smartspace/LockscreenSmartspaceGeneralView.java
-@@ -30,7 +30,13 @@ import static java.util.Objects.requireNonNull;
-  * reimplementation of the legacy KeyguardSliceView.
-  */
- public class LockscreenSmartspaceGeneralView extends LinearLayout implements DefaultSmartspaceView {
-+    /** Graphite: logging instance ids that mark the date and next alarm rows. */
-+    public static final int ROW_DATE = 1;
-+    public static final int ROW_ALARM = 2;
-+
-     private Rows mRows;
-+    private SmartspaceTarget mTarget;
-+    private boolean mHideDateAndAlarm;
-     private final int mIconSize;
- 
-     public LockscreenSmartspaceGeneralView(Context context, AttributeSet attrs) {
-@@ -45,9 +51,29 @@ public class LockscreenSmartspaceGeneralView extends LinearLayout implements Def
-         mRows = findViewById(R.id.rows);
-     }
- 
-+    /**
-+     * Graphite: leaves out the date and next alarm rows while a large clock that shows them itself
-+     * is on screen (like the Weather clock), as Pixels do. The other rows stay.
-+     */
-+    public void setHideDateAndAlarm(boolean hide) {
-+        if (mHideDateAndAlarm == hide) return;
-+        mHideDateAndAlarm = hide;
-+        if (mTarget != null) showTarget(mTarget);
-+    }
-+
-+    private boolean isHidden(BaseTemplateData data) {
-+        if (!mHideDateAndAlarm || data.getPrimaryItem() == null) return false;
-+        BaseTemplateData.SubItemLoggingInfo info = data.getPrimaryItem().getLoggingInfo();
-+        if (info == null) return false;
-+        int row = info.getInstanceId();
-+        return row == ROW_DATE || row == ROW_ALARM;
-+    }
-+
-     protected void showTarget(SmartspaceTarget target) {
-+        mTarget = target;
-         var template = (CombinedCardsTemplateData) requireNonNull(target.getTemplateData());
--        List<BaseTemplateData> subTemplates = template.getCombinedCardDataList();
-+        List<BaseTemplateData> subTemplates = new java.util.ArrayList<>(template.getCombinedCardDataList());
-+        subTemplates.removeIf(this::isHidden);
- 
-         if (subTemplates.isEmpty()) {
-             mRows.setVisibility(View.GONE);
 diff --git a/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/ClockSection.kt b/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/ClockSection.kt
 index 38584313d86d52c1e876d3e11a7c860664f06fc4..9870064759b76a5a4c17e16de40b3a4d75662aaa 100644
 --- a/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/ClockSection.kt
@@ -180,10 +126,10 @@ index 38584313d86d52c1e876d3e11a7c860664f06fc4..9870064759b76a5a4c17e16de40b3a4d
              ) {
                  connect(
 diff --git a/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/SmartspaceSection.kt b/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/SmartspaceSection.kt
-index cccb645fa954f50690c6675183361214e194f143..dcb3e3157faa942958ca8f7d46c5affba941bee9 100644
+index cccb645fa954f50690c6675183361214e194f143..46c8008b826de1410822189fa1b3193dbddca177 100644
 --- a/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/SmartspaceSection.kt
 +++ b/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/SmartspaceSection.kt
-@@ -225,32 +225,28 @@ constructor(
+@@ -225,32 +225,25 @@ constructor(
              // Graphite: with the large clock, At a Glance goes to the top (where the small clock
              // would be) and the large clock below it, as on Pixels. It stayed anchored under the
              // hidden small clock while the large clock started at a fixed margin, so taller At a
@@ -216,11 +162,8 @@ index cccb645fa954f50690c6675183361214e194f143..dcb3e3157faa942958ca8f7d46c5affb
 +            // Glance content ended up inside the clock.
 +            // Clocks that show their own date and weather (the Weather clock) place At a Glance
 +            // themselves: Google's Weather clock puts it between its time and its weather on
-+            // purpose (barrier weather_clock_bc_smartspace_bottom). Their layout stays; At a
-+            // Glance only leaves out the date and alarm the clock already shows, as on Pixels.
++            // purpose (barrier weather_clock_bc_smartspace_bottom), so their layout stays.
 +            val showsOwnDate = keyguardClockViewModel.hasCustomWeatherDataDisplay.value
-+            (smartspaceView as? LockscreenSmartspaceGeneralView)
-+                ?.setHideDateAndAlarm(isLargeClockVisible && showsOwnDate)
 +            if (isLargeClockVisible && !dateWeatherBelowLargeClock && !showsOwnDate) {
 +                clear(sharedR.id.date_smartspace_view, ConstraintSet.BOTTOM)
 +                connect(
@@ -238,29 +181,3 @@ index cccb645fa954f50690c6675183361214e194f143..dcb3e3157faa942958ca8f7d46c5affb
                  // The large clock is anchored below it in ClockSection (applied after this one)
              }
  
-diff --git a/packages/SystemUI/src/com/android/systemui/smartspace/service/SystemUISmartspaceService.java b/packages/SystemUI/src/com/android/systemui/smartspace/service/SystemUISmartspaceService.java
-index 6b2bd2b82a91debc70c6639fca608e59ee44ca44..fd3276434ae1245431737081692a8cb142cb7447 100644
---- a/packages/SystemUI/src/com/android/systemui/smartspace/service/SystemUISmartspaceService.java
-+++ b/packages/SystemUI/src/com/android/systemui/smartspace/service/SystemUISmartspaceService.java
-@@ -324,6 +324,10 @@ public class SystemUISmartspaceService extends SmartspaceService implements
-         return new BaseTemplateData.Builder(UI_TEMPLATE_DEFAULT)
-                 .setPrimaryItem(new SubItemInfo.Builder()
-                         .setText(new Text.Builder(mFormattedDate).build())
-+                        // Graphite: lets the view leave it out next to clocks that show the date
-+                        .setLoggingInfo(new BaseTemplateData.SubItemLoggingInfo.Builder(
-+                                LockscreenSmartspaceGeneralView.ROW_DATE,
-+                                SmartspaceTarget.FEATURE_UNDEFINED).build())
-                         .build())
-                 .build();
-     }
-@@ -340,6 +344,10 @@ public class SystemUISmartspaceService extends SmartspaceService implements
-                 .setPrimaryItem(new SubItemInfo.Builder()
-                         .setText(new Text.Builder(mFormattedNextAlarmDate).build())
-                         .setIcon(new Icon.Builder(alarmIcon).build())
-+                        // Graphite: lets the view leave it out next to clocks that show the alarm
-+                        .setLoggingInfo(new BaseTemplateData.SubItemLoggingInfo.Builder(
-+                                LockscreenSmartspaceGeneralView.ROW_ALARM,
-+                                SmartspaceTarget.FEATURE_ALARM).build())
-                         .build())
-                 .build();
-     }

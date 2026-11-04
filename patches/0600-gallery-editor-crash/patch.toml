@@ -1,0 +1,22 @@
+title = "Gallery editor: no crash when editing a screenshot right away"
+description = """
+Bug fix (user report 2026-11-04): tapping Edit on a screenshot opens AOSP Gallery's photo editor
+(com.android.gallery3d, filtershow). Its first draw can run before the image is loaded, and
+PrimaryImage.setImageShowSize divided by the bounds of the not yet loaded image:
+NullPointerException (Rect.width() on null) and the editor crashed, only sometimes since it's a race.
+setImageShowSize now waits for the bounds; the next draw sets the size.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "Editing a screenshot can sometimes crash the photo editor."
+category = "fix"
+depends = []
+enabled = true
+notes = ""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0600-gallery-editor-crash --project <path> --new
+
+[[change]]
+project = "packages/apps/Gallery2"
+file = "packages_apps_Gallery2.patch"
