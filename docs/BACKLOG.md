@@ -30,6 +30,14 @@ every existing toggle has to actually do what it says.
 | 22 | Lock screen clocks (Weather clock) kept the old palette with the screen on, AOD was right | SystemUI | Plugin contexts follow overlay changes | Done (patch 0560): tested on the emulator |
 | 23 | At a Glance sat inside the large Weather clock (between time and date), clock shifted up | SystemUI | At a Glance at the top, large clock below, all clocks | Done (patch 0590), to check on the phone |
 | 24 | Lawnchair search quick toggles: colours by on/off like SystemUI | Launcher | Already in the newer Lawnchair (#8) | Checked on the emulator: off is a light pill, on the primary colour |
+| 25 | Song recognition didn't work on the phone, manual recognition failed after a few seconds | Now Playing, build | Logs from the phone | Fixed: every Graphite build had the same fingerprint (envsetup.sh reused the first build's date), so the OTA wasn't treated as an upgrade and the default permission grants never ran: the core had no RECORD_AUDIO, the engine no READ_PHONE_STATE ("assuming call in progress"). Releases now get their own build number; turning Now Playing on also grants its permissions |
+| 26 | No Bluetooth battery card; show left, right and case for earbuds | Launcher | | Fixed: same missing default grant (BLUETOOTH_CONNECT). Card shows L/R/case when the earbuds report them (Bluetooth metadata), otherwise one level. Sony earbuds over classic Bluetooth only report one level |
+| 27 | App drawer still blue-tinted on the phone | Launcher | | Fixed: with blur the drawer used a fixed light blue (#66D9E2FF); now SystemUI's shade panel colours. The emulator has no blur, so it never showed |
+| 28 | Search bar too strong; use the themed icon background colour | Launcher | | Done: new "Themed icon colours" style, used by Automatic while themed icons are on |
+| 29 | Search quick toggles inconsistent (torch without colour or haptics) | Launcher | | Done: torch, Wi-Fi and Bluetooth toggle directly with on/off colours, hotspot and cast show state, every tile has SystemUI's haptics and re-reads its real state |
+| 30 | KernelSU-Next: "Failed to grant root" | Kernel, build | | Fixed: the manager's libksud.so was installed as 0644, so it couldn't run ksud. Patch 0003 + config.fs make it 0755 |
+| 31 | Weather clock: At a Glance between time and weather | SystemUI | | Checked on the phone: Google's Weather clock places At a Glance there itself. Kept its layout, but At a Glance no longer repeats the date and alarm the clock shows (0590). Other clocks: At a Glance above the large clock |
+| 32 | Update to GrapheneOS 2026110200 | Build | | Done: all patches unchanged; KernelSU kernel reinstalled (same kernel source as GrapheneOS' rebuild) |
 
 ## Plan to the release (user, 2026-11-03)
 
