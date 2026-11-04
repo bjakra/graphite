@@ -52,3 +52,8 @@ GrapheneOS' "USB-C port: charging-only when locked", so data stays off until the
 still have shown up, and neither did. To check after unlocking: `adb shell pm list packages org.graphite.nowplaying` must list the package
 (new in this build; the build number and date are pinned to the tag, so they look the same as before), then the
 large-clock layout (0590), real song recognition, the Bluetooth card and items 5, 8, 14 and 18.
+
+Release 2026-11-04 (second): `2026110400` on GrapheneOS 2026110200 with items 25-32, ready to install, not flashed yet.
+`src/releases/2026110400/release-husky-2026110400/husky-ota_update-2026110400.zip` (`adb reboot sideload-auto-reboot`, then
+`adb sideload` it). Checked in the release: new fingerprint and timestamp, libksud.so 0755, KernelSU kernel. After installing,
+check Now Playing (Graphite settings, recognise now), the headphones card, the drawer colour and KernelSU root.
