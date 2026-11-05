@@ -4,6 +4,7 @@ Date: Tue, 3 Nov 2026 15:03:25 +0100
 Subject: [PATCH] Doze: double tap to wake with a single tap sensor
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
 ---
  .../com/android/systemui/doze/DozeTriggers.java  | 16 ++++++++++++++++
  1 file changed, 16 insertions(+)
@@ -46,3 +47,234 @@ index e8405b68b1e88d0a6693a57bf88f64d0dcf8a6a3..922b5cb85e19016ef0a8ebebf711c00f
          boolean isPickup = pulseReason == DozeLog.REASON_SENSOR_PICKUP;
          boolean isLongPress = pulseReason == DozeLog.PULSE_REASON_SENSOR_LONG_PRESS;
          boolean isWakeOnPresence = pulseReason == DozeLog.REASON_SENSOR_WAKE_UP_PRESENCE;
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 15:11:50 +0100
+Subject: [PATCH] Double tap to sleep and wake: make them work on the phone
+
+Sleep: the keyguard touch view only accepted ACTION_DOWN when long press is enabled, so the double tap detector never
+saw the rest of the gesture on phones without the lock screen customization.
+Wake: PulsingGestureListener still woke on a single tap while the display wasn't in its low power state. In that state
+the tap sensor reports one event for two quick taps and doesn't re-arm by itself, so swallowing the first event left
+nothing that could wake the screen. The first tap now lights up the screen (a pulse), which brings back the touch
+screen for the second tap, and the sensor is re-armed.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01A7tdbTAv6xiqf4SbJWNdwp
+
+---
+ .../TouchHandlingViewInteractionHandler.kt    |  8 +++--
+ .../android/systemui/doze/DozeSensors.java    |  6 +++-
+ .../android/systemui/doze/DozeTriggers.java   | 20 +++++------
+ .../systemui/doze/GraphiteDoubleTap.java      | 33 +++++++++++++++++++
+ .../systemui/shade/PulsingGestureListener.kt  | 13 ++++++--
+ 5 files changed, 63 insertions(+), 17 deletions(-)
+ create mode 100644 packages/SystemUI/src/com/android/systemui/doze/GraphiteDoubleTap.java
+
+diff --git a/packages/SystemUI/src/com/android/systemui/common/ui/view/TouchHandlingViewInteractionHandler.kt b/packages/SystemUI/src/com/android/systemui/common/ui/view/TouchHandlingViewInteractionHandler.kt
+index 01fd930539f63b2a6a2ea5a648978dd83f28ff07..3d21ee606f5da40046f3e0330c4ad6b5934a71a3 100644
+--- a/packages/SystemUI/src/com/android/systemui/common/ui/view/TouchHandlingViewInteractionHandler.kt
++++ b/packages/SystemUI/src/com/android/systemui/common/ui/view/TouchHandlingViewInteractionHandler.kt
+@@ -112,12 +112,16 @@ class TouchHandlingViewInteractionHandler(
+             }
+         }
+ 
+-        if (isLongPressHandlingEnabled) {
++        // Graphite: also for double tap, which only gets the rest of the gesture by accepting ACTION_DOWN. AOSP
++        // only did that for long press, which is off on phones without the lock screen customization
++        if (isLongPressHandlingEnabled || isDoubleTapHandlingEnabled) {
+             val motionEventModel = event.toModel()
+ 
+             return when (motionEventModel) {
+                 is MotionEventModel.Down -> {
+-                    scheduleLongPress(motionEventModel.x, motionEventModel.y)
++                    if (isLongPressHandlingEnabled) {
++                        scheduleLongPress(motionEventModel.x, motionEventModel.y)
++                    }
+                     lastEventDownCoordinate.x = motionEventModel.x
+                     lastEventDownCoordinate.y = motionEventModel.y
+                     true
+diff --git a/packages/SystemUI/src/com/android/systemui/doze/DozeSensors.java b/packages/SystemUI/src/com/android/systemui/doze/DozeSensors.java
+index 4be31bf6ffe00b2694714d6319a628b0e7092b07..d599f720fbdf17a40f1228688fe3014d55313c74 100644
+--- a/packages/SystemUI/src/com/android/systemui/doze/DozeSensors.java
++++ b/packages/SystemUI/src/com/android/systemui/doze/DozeSensors.java
+@@ -761,7 +761,11 @@ public class DozeSensors {
+                     screenY = event.values[1];
+                 }
+                 mSensorCallback.onSensorPulse(mPulseReason, screenX, screenY, event.values);
+-                if (!mRegistered && mImmediatelyReRegister) {
++                // Graphite: double tap to wake needs this sensor again for the second tap
++                if (!mRegistered && (mImmediatelyReRegister
++                        || (mPulseReason == DozeLog.REASON_SENSOR_TAP
++                        && mSecureSettings.getIntForUser(GraphiteDoubleTap.SETTING, 0,
++                                mSelectedUserInteractor.getSelectedUserId()) == 1))) {
+                     updateListening();
+                 }
+             }));
+diff --git a/packages/SystemUI/src/com/android/systemui/doze/DozeTriggers.java b/packages/SystemUI/src/com/android/systemui/doze/DozeTriggers.java
+index 922b5cb85e19016ef0a8ebebf711c00fac8e0938..3015bfca42cc67b35c28d5ef1f543f1e893ad098 100644
+--- a/packages/SystemUI/src/com/android/systemui/doze/DozeTriggers.java
++++ b/packages/SystemUI/src/com/android/systemui/doze/DozeTriggers.java
+@@ -306,23 +306,19 @@ public class DozeTriggers implements DozeMachine.Part {
+         }
+     }
+ 
+-    private static final long GRAPHITE_DOUBLE_TAP_MILLIS = 600;
+-    private long mGraphiteLastTap;
+-
+     @VisibleForTesting
+     void onSensor(int pulseReason, float screenX, float screenY, float[] rawValues) {
+         boolean isDoubleTap = pulseReason == DozeLog.REASON_SENSOR_DOUBLE_TAP;
+         boolean isTap = pulseReason == DozeLog.REASON_SENSOR_TAP;
+-        // Graphite: double tap to wake on devices with only a single tap sensor. The first tap is
+-        // remembered, and only a second one shortly after wakes the screen.
++        // Graphite: double tap to wake on a phone with only a single tap sensor, which reports one event for
++        // two quick taps. The first tap lights up the screen (a pulse), which brings back the touch screen,
++        // and the second one reaches PulsingGestureListener; or this sensor, re-armed by DozeSensors.
+         if (isTap && Settings.Secure.getIntForUser(mContext.getContentResolver(),
+-                "graphite_double_tap_to_wake", 0, UserHandle.USER_CURRENT) == 1) {
+-            long now = SystemClock.uptimeMillis();
+-            if (now - mGraphiteLastTap > GRAPHITE_DOUBLE_TAP_MILLIS) {
+-                mGraphiteLastTap = now;
+-                return;
+-            }
+-            mGraphiteLastTap = 0;
++                GraphiteDoubleTap.SETTING, 0, UserHandle.USER_CURRENT) == 1
++                && !GraphiteDoubleTap.isSecondTap(GraphiteDoubleTap.SENSOR_WINDOW_MILLIS)) {
++            requestPulse(pulseReason, true /* alreadyPerformedProxCheck */,
++                    null /* onPulseSuppressedListener */);
++            return;
+         }
+         boolean isPickup = pulseReason == DozeLog.REASON_SENSOR_PICKUP;
+         boolean isLongPress = pulseReason == DozeLog.PULSE_REASON_SENSOR_LONG_PRESS;
+diff --git a/packages/SystemUI/src/com/android/systemui/doze/GraphiteDoubleTap.java b/packages/SystemUI/src/com/android/systemui/doze/GraphiteDoubleTap.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..ffba891d59af9c2830a4a1a40144f938fd4468d7
+--- /dev/null
++++ b/packages/SystemUI/src/com/android/systemui/doze/GraphiteDoubleTap.java
+@@ -0,0 +1,33 @@
++package com.android.systemui.doze;
++
++import android.os.SystemClock;
++
++/**
++ * Graphite: double tap to wake (Settings.Secure graphite_double_tap_to_wake) on a phone that only has a
++ * single tap sensor. Remembers the first tap, whichever way it arrived: from the sensor while the display is
++ * in its low power state ({@link DozeTriggers}), or from the touch screen while it's not
++ * ({@link com.android.systemui.shade.PulsingGestureListener}). Only used on the main thread.
++ */
++public final class GraphiteDoubleTap {
++    public static final String SETTING = "graphite_double_tap_to_wake";
++
++    /** Time for the second tap after a tap on the touch screen. */
++    public static final long TOUCH_WINDOW_MILLIS = 600;
++    /** Time for the second tap after a tap on the sensor, which includes the screen coming on. */
++    public static final long SENSOR_WINDOW_MILLIS = 3000;
++
++    private static long sSecondTapUntil;
++
++    private GraphiteDoubleTap() {}
++
++    /** Returns whether this tap is the second one; if not, it's remembered as the first one. */
++    public static boolean isSecondTap(long windowMillis) {
++        long now = SystemClock.uptimeMillis();
++        if (now < sSecondTapUntil) {
++            sSecondTapUntil = 0;
++            return true;
++        }
++        sSecondTapUntil = now + windowMillis;
++        return false;
++    }
++}
+diff --git a/packages/SystemUI/src/com/android/systemui/shade/PulsingGestureListener.kt b/packages/SystemUI/src/com/android/systemui/shade/PulsingGestureListener.kt
+index 062327dc2acfec20dcc0d2b7d65f4abd7413a4ee..92ff651f3f83a96310484bff65b1780c4e991fca 100644
+--- a/packages/SystemUI/src/com/android/systemui/shade/PulsingGestureListener.kt
++++ b/packages/SystemUI/src/com/android/systemui/shade/PulsingGestureListener.kt
+@@ -25,6 +25,7 @@ import android.view.MotionEvent
+ import com.android.systemui.Dumpable
+ import com.android.systemui.dagger.SysUISingleton
+ import com.android.systemui.dock.DockManager
++import com.android.systemui.doze.GraphiteDoubleTap
+ import com.android.systemui.dump.DumpManager
+ import com.android.systemui.keyguard.domain.interactor.DozeInteractor
+ import com.android.systemui.plugins.FalsingManager
+@@ -63,9 +64,10 @@ constructor(
+ ) : GestureDetector.SimpleOnGestureListener(), Dumpable {
+     private var doubleTapEnabled = false
+     private var singleTapEnabled = false
++    private var graphiteDoubleTapToWake = false
+ 
+     init {
+-        val tunable = Tunable { key: String?, _: String? ->
++        val tunable = Tunable { key: String?, newValue: String? ->
+             when (key) {
+                 Settings.Secure.DOZE_DOUBLE_TAP_GESTURE ->
+                     doubleTapEnabled =
+@@ -73,12 +75,14 @@ constructor(
+                 Settings.Secure.DOZE_TAP_SCREEN_GESTURE ->
+                     singleTapEnabled =
+                         ambientDisplayConfiguration.tapGestureEnabled(userTracker.userId)
++                GraphiteDoubleTap.SETTING -> graphiteDoubleTapToWake = newValue == "1"
+             }
+         }
+         tunerService.addTunable(
+             tunable,
+             Settings.Secure.DOZE_DOUBLE_TAP_GESTURE,
+-            Settings.Secure.DOZE_TAP_SCREEN_GESTURE
++            Settings.Secure.DOZE_TAP_SCREEN_GESTURE,
++            GraphiteDoubleTap.SETTING
+         )
+ 
+         dumpManager.registerDumpable(this)
+@@ -95,6 +99,11 @@ constructor(
+             val proximityIsNotNear = !falsingManager.isProximityNear
+             val isNotAFalseTap = !falsingManager.isFalseTap(LOW_PENALTY)
+             shadeLogger.logSingleTapUpFalsingState(proximityIsNotNear, isNotAFalseTap)
++            // Graphite: with double tap to wake, a single tap only counts as the first of two
++            if (graphiteDoubleTapToWake && proximityIsNotNear && isNotAFalseTap &&
++                !GraphiteDoubleTap.isSecondTap(GraphiteDoubleTap.TOUCH_WINDOW_MILLIS)) {
++                return true
++            }
+             if (proximityIsNotNear && isNotAFalseTap) {
+                 shadeLogger.d("Single tap handled, requesting centralSurfaces.wakeUpIfDozing")
+                 dozeInteractor.setLastTapToWakePosition(Point(x.toInt(), y.toInt()))
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 16:10:40 +0100
+Subject: [PATCH] Double tap to sleep: time the second tap, not both
+
+GestureDetector calls onDoubleTap with the first tap's down event, so the 300 ms limit covered the whole double tap and
+only very fast ones counted. It now starts at the second tap's down event, as it was meant to.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01A7tdbTAv6xiqf4SbJWNdwp
+
+---
+ .../ui/view/TouchHandlingViewInteractionHandler.kt     | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/packages/SystemUI/src/com/android/systemui/common/ui/view/TouchHandlingViewInteractionHandler.kt b/packages/SystemUI/src/com/android/systemui/common/ui/view/TouchHandlingViewInteractionHandler.kt
+index 3d21ee606f5da40046f3e0330c4ad6b5934a71a3..429d657dc4e0935289663002688a1d74e27f109a 100644
+--- a/packages/SystemUI/src/com/android/systemui/common/ui/view/TouchHandlingViewInteractionHandler.kt
++++ b/packages/SystemUI/src/com/android/systemui/common/ui/view/TouchHandlingViewInteractionHandler.kt
+@@ -84,11 +84,19 @@ class TouchHandlingViewInteractionHandler(
+                 override fun onDoubleTap(event: MotionEvent): Boolean {
+                     if (isDoubleTapHandlingEnabled) {
+                         doubleTapAwaitingUp = true
+-                        lastDoubleTapDownEventTime = event.eventTime
+                         return true
+                     }
+                     return false
+                 }
++
++                // Graphite: not in onDoubleTap, which gets the first tap's down event. That made the time
++                // limit below cover both taps, 300 ms in total, which a normal double tap often misses.
++                override fun onDoubleTapEvent(event: MotionEvent): Boolean {
++                    if (event.actionMasked == MotionEvent.ACTION_DOWN) {
++                        lastDoubleTapDownEventTime = event.eventTime
++                    }
++                    return isDoubleTapHandlingEnabled
++                }
+             },
+         )
+ 

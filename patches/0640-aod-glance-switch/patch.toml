@@ -1,0 +1,21 @@
+title = "Lock screen: separate At a Glance switch for the always-on display"
+description = """
+User request 2026-11-05: At a Glance on the always-on display and on the lock screen can be switched independently,
+for example shown on the AOD only. LockscreenSmartspaceGeneralView also reads Settings.Secure graphite_aod_at_a_glance
+(default 1 = shown) and fades its rows between the two settings with the doze amount, instead of hiding them on both
+with graphite_lockscreen_at_a_glance (patch 0610). The switch itself is in GraphiteParts (LockScreenFragment).
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "The always-on display switch for At a Glance has no effect; the lock screen switch (patch 0610) controls both."
+category = "feature"
+depends = ["0610-lockscreen-glance-switch"]
+enabled = true
+notes = ""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0640-aod-glance-switch --project <path> --new
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"

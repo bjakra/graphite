@@ -84,3 +84,16 @@ Still to check on the phone after flashing, because the emulator has no real mic
   measured on the phone.
 
 Known cost: the core keeps the song list in memory after a database search (about 180 MB with four countries).
+
+## Phone report, 2026-11-05
+
+Fixed and tested on the emulator, not yet on the phone (needs a release build):
+
+| Item | Cause | Still to check on the phone |
+|---|---|---|
+| Song download stuck at 0% | Expediting ran all three job variants; the delayed and periodic ones reschedule and cancel the one that downloads. Scheduled updates could never download: Android never runs a job needing a network for an app without INTERNET | Add a country unplugged. The 13 minute stall on 2026-11-05 07:04 isn't fully explained: its logs are gone |
+| Notification stayed on Preparing after the install | The finished check counted all songs (43 s on the phone); one text for both stages | Time after the install |
+| Double tap to sleep never worked | Touch view refused ACTION_DOWN with long press off; AOSP timed both taps against 300 ms | Real finger speed |
+| Double tap to wake: single tap woke, later nothing did | PulsingGestureListener ignored the setting; the tap sensor reports one event for two quick taps and doesn't re-arm | **Sensor path untested**: the emulator has no tap sensor. First tap should light the screen, the second wake it |
+| At a Glance on the AOD only | New switch (patch 0640) | Layout on the real AOD |
+

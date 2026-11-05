@@ -1,9 +1,15 @@
 title = "Lock screen: double tap to sleep and to wake"
 description = """
 Enables AOSP's lock screen double tap to sleep (aconfig com.android.systemui.double_tap_to_sleep in the cp2a value set,
-plus config_supportDoubleTapSleep from the Graphite overlay); it follows Settings.Secure double_tap_to_sleep. Adds double
-tap to wake for devices with only a single tap sensor: with Secure graphite_double_tap_to_wake = 1, DozeTriggers ignores a
-first tap and wakes on a second one within 600 ms. Switches are in Graphite settings, Lock screen.
+plus config_supportDoubleTapSleep from the Graphite overlay); it follows Settings.Secure double_tap_to_sleep. AOSP's touch
+view only accepted ACTION_DOWN when long press is enabled, which is off here, so TouchHandlingViewInteractionHandler now
+also does for double tap. It also timed the whole double tap against the 300 ms limit (onDoubleTap gets the first tap's
+down event), so only very fast ones counted; the limit now starts at the second tap.
+Adds double tap to wake for devices with only a single tap sensor (Secure graphite_double_tap_to_wake = 1). While the
+display isn't in its low power state, PulsingGestureListener treats a single tap as the first of two. In the low power
+state the sensor reports one event for two quick taps and doesn't re-arm by itself, so DozeTriggers turns the first tap
+into a pulse, which brings back the touch screen for the second tap (up to 3 s), and DozeSensors re-arms the sensor.
+GraphiteDoubleTap holds the shared state. Switches are in Graphite settings, Lock screen.
 """
 # false = the ROM still builds and works without it; build.sh may skip it on failure
 required = false
