@@ -202,5 +202,10 @@ The Pixel 8 kernel lives in `kernel/pixel` (GrapheneOS `kernel_pixel_6.1`, branc
 sync of that project restores GrapheneOS's kernel, so run `tools/kernel/build-husky.sh --install-only` again after one. All
 modules come from the same build, because forced module signing and struct randomisation tie modules to their kernel build.
 
-SUSFS isn't integrated yet. `tools/kernel/apply-kernelsu.sh` leaves out KernelSU-Next's `kernel/susfs` directory, and nothing else
-in the kernel depends on it, so it can be added later.
+SuSFS (KernelSU-Next's own, `apps/KernelSU-Next/kernel/susfs`) is compiled into the kernel rather than loaded as the
+`susfs_guard_lkm.ko` module, because forced module signing and struct randomisation reject any externally built module.
+`tools/kernel/apply-kernelsu.sh` copies the `susfs` directory and the driver's `Kbuild` builds it into the kernelsu
+driver under `CONFIG_KSU_SUSFS` (default on); KernelSU-Next arms it from `on_post_fs_data()`, the point at which ksud
+would otherwise have insmod'd the module. SuSFS hides root, so it weakens the device's resistance to tamper detection;
+it is on because KernelSU already is. The integration is recorded in `patches-kernel/0002-susfs.patch` (see its
+`.toml` for the details).

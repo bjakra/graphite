@@ -1,0 +1,46 @@
+# Descriptor for patches-kernel/0002-susfs.patch, in the style of patches/<id>/patch.toml.
+# Kernel patches are applied to kernel/pixel/common/ack, not to src/, so patchctl does not manage
+# them; this file documents the patch for readers and future fixes.
+title = "Build KernelSU-Next SuSFS into the kernel"
+
+description = """
+User request 2026-11-05: KernelSU-Next's manager has a "Load SuSFS LKM" button that always failed
+with "failed to load lkm". The husky kernel sets CONFIG_MODULE_SIG_FORCE (unsigned modules are
+rejected) and CONFIG_RANDSTRUCT_FULL (a module built anywhere else does not match the kernel's
+struct layout), so the manager's prebuilt susfs_guard_lkm.ko can never load here.
+
+Instead of loading it, KernelSU-Next's own SuSFS (apps/KernelSU-Next/kernel/susfs, the same code
+that backs the manager's SuSFS screens, reached over the reboot(2) supercall) is compiled into the
+kernelsu driver:
+  - CONFIG_KSU_SUSFS (default y, depends on KSU) gates the build.
+  - The susfs/*.o objects join kernelsu-objs; each is force-included with susfs/susfs_builtin.h,
+    which renames SuSFS's private copies of the shared infra (symbol_resolver, lsm_hook,
+    patch_memory) to susfs_i_* so their globals do not clash with the driver's.
+  - SuSFS is armed from on_post_fs_data() via susfs_builtin_init(), the point at which ksud would
+    otherwise have insmod'd the module, so the SELinux policy is loaded for its SID resolutions.
+    module_init/module_exit stay only under #ifdef MODULE, and __init/__exit are dropped.
+  - fs/proc/bootconfig.c: saved_boot_config is exposed (non-static) under CONFIG_KSU_SUSFS because
+    SuSFS's spoof_cmdline layer rewrites it by name. This is the one edit outside drivers/kernelsu.
+
+The driver side (drivers/kernelsu/susfs and the Kbuild/Kconfig/boot_event.c edits) is produced by
+tools/kernel/apply-kernelsu.sh, which also makes the bootconfig.c edit; 0002-susfs.patch is the
+format-patch record of the resulting commit in kernel/pixel/common/ack.
+"""
+
+# true: relaxes a GrapheneOS security property, approved by the user for this specific change.
+security_relaxing = true
+security_note = """
+SuSFS hides root and mounts from detection, which weakens the device's resistance to tamper and
+integrity checks. It is enabled because KernelSU itself already is; both are deliberate departures
+from GrapheneOS for this fork, requested by the user.
+"""
+
+required = false
+skip_impact = "No SuSFS: KernelSU works, but root/mount hiding is unavailable and the manager's SuSFS screens stay empty."
+depends = ["0001-kernelsu-next"]
+
+applied_by = "tools/kernel/apply-kernelsu.sh"   # copies kernel/susfs, wires the Kbuild/Kconfig, edits bootconfig.c
+built_by = "tools/kernel/build-husky.sh"
+config = "CONFIG_KSU_SUSFS=y"
+source = "apps/KernelSU-Next/kernel/susfs (KernelSU-Next's own SuSFS, not simonpunk/pershoot)"
+notes = "SUS_SU is not used (KernelSU-Next hooks are manual, not kprobe). Built 2026-11-05; not yet boot-tested on the phone."

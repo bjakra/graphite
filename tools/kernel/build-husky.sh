@@ -3,8 +3,9 @@
 # All modules are rebuilt with it: GrapheneOS's kernel uses struct randomisation and forced module
 # signing, so prebuilt modules only load on the exact kernel build they came from.
 #   tools/kernel/build-husky.sh [--install-only]
-# SUSFS is not integrated. apply-kernelsu.sh leaves out KernelSU-Next's kernel/susfs directory, so adding it later
-# only needs that exclude removed plus the driver's kernel configuration.
+# SuSFS (KernelSU-Next's own) is compiled in via CONFIG_KSU_SUSFS: apply-kernelsu.sh copies kernel/susfs
+# and the Kbuild builds it into the kernelsu driver, so it is armed from on_post_fs_data() instead of
+# being loaded as susfs_guard_lkm.ko (which forced signing + struct randomisation would reject).
 set -euo pipefail
 G="$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)"
 P="$G/kernel/pixel"
