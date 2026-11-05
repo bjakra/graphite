@@ -11,14 +11,15 @@ BinderGms2Gca.rewriteAttestationChain accepts only Play services' UID (an inert 
 upgraded installs aside). Nothing is bundled, downloaded or logged.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
 ---
  AndroidManifest.xml                           |  16 ++
- res/values/strings.xml                        |  15 ++
+ res/values/strings.xml                        |  16 ++
  src/app/grapheneos/gmscompat/BinderGms2Gca.kt |  23 +++
  .../gmscompat/keybox/KeyboxActivity.kt        | 137 +++++++++++++++++
  .../gmscompat/keybox/KeyboxPackageReceiver.kt |  21 +++
  .../gmscompat/keybox/KeyboxStore.kt           | 140 ++++++++++++++++++
- 6 files changed, 352 insertions(+)
+ 6 files changed, 353 insertions(+)
  create mode 100644 src/app/grapheneos/gmscompat/keybox/KeyboxActivity.kt
  create mode 100644 src/app/grapheneos/gmscompat/keybox/KeyboxPackageReceiver.kt
  create mode 100644 src/app/grapheneos/gmscompat/keybox/KeyboxStore.kt
@@ -50,28 +51,29 @@ index 7649a9d2a084a2aa87c490e94c14c268dff4129a..26e06315c19580fb4d5124e5d1615429
      </application>
  </manifest>
 diff --git a/res/values/strings.xml b/res/values/strings.xml
-index 29adbe377fd4b9c39be000e0b615fe76d3831e89..6d3ed3905183244d455ad5ac325d84bf7a1d6c3e 100644
+index 29adbe377fd4b9c39be000e0b615fe76d3831e89..a2099fa033661408b7ffc98ff0a95f212c28f674 100644
 --- a/res/values/strings.xml
 +++ b/res/values/strings.xml
-@@ -229,4 +229,19 @@ Some carriers require an entitlement check (GSMA TS.43 with EAP-AKA authenticati
+@@ -229,4 +229,20 @@ Some carriers require an entitlement check (GSMA TS.43 with EAP-AKA authenticati
      <string name="notif_rcs_needs_baseline_perms_text">Some apps are missing permissions for RCS, and activation might not complete. Tap to open Play services special permissions for more information.</string>
      <string name="notif_rcs_needs_baseline_perms_text_icc">Your carrier may require ICC authentication for RCS setup. Tap to open Play services special permissions for more information.</string>
      <string name="notif_rcs_needs_baseline_perms_text_icc_and_other_perms">Your carrier may require ICC authentication for RCS setup, and other permissions are needed. Tap to open Play services special permissions for more information.</string>
-+    <string name="keybox_title">Play keybox</string>
-+    <string name="keybox_enabled_title">Use custom keybox</string>
-+    <string name="keybox_enabled_summary">Off by default. Applies only to Play services in this user or profile.</string>
-+    <string name="keybox_play_missing">Sandboxed Play services is not installed in this user or profile.</string>
-+    <string name="keybox_not_configured">No keybox imported. Play services attestation is unchanged.</string>
-+    <string name="keybox_not_valid_now">The imported certificate chain is expired or not valid yet. Play services attestation is unchanged.</string>
-+    <string name="keybox_configured">Imported: %1$s. Earliest certificate expiry: %2$s.</string>
-+    <string name="keybox_import_title">Import keybox</string>
-+    <string name="keybox_import_summary">Choose an AndroidAttestation XML file. Importing does not enable it.</string>
-+    <string name="keybox_imported">Keybox validated and imported.</string>
-+    <string name="keybox_import_failed">Invalid keybox. The existing keybox and setting were not changed.</string>
-+    <string name="keybox_clear_title">Delete keybox</string>
-+    <string name="keybox_clear_summary">Turn off the feature and remove its private key from this user or profile.</string>
-+    <string name="keybox_clear_confirm">Delete the imported private key and certificate chain?</string>
-+    <string name="keybox_explanation">This re-signs only Android key-attestation leaves requested by genuine, unprivileged Play services. The application public key and attestation fields stay unchanged; the keybox supplies the issuer chain. It does not guarantee a Play Integrity verdict. Other apps, system components and users are unaffected. The file is stored in GmsCompat’s private, no-backup storage and is deleted with Play services or this user. No keybox is bundled or downloaded.</string>
++    <string name="keybox_title">Play Integrity keybox</string>
++    <string name="keybox_enabled_title">Use keybox</string>
++    <string name="keybox_enabled_summary">Only Google Play services in this profile uses it. Off by default.</string>
++    <string name="keybox_play_missing">Google Play services isn\'t installed in this profile.</string>
++    <string name="keybox_not_configured">No keybox added</string>
++    <string name="keybox_not_valid_now">The keybox has expired or isn\'t valid yet, so it isn\'t used.</string>
++    <string name="keybox_configured">Keybox added (%1$s), valid until %2$s</string>
++    <string name="keybox_import_title">Add keybox</string>
++    <string name="keybox_import_summary">Choose a keybox.xml file. Adding it doesn\'t turn it on.</string>
++    <string name="keybox_imported">Keybox added</string>
++    <string name="keybox_import_failed">This file isn\'t a valid keybox. Nothing was changed.</string>
++    <string name="keybox_clear_title">Remove keybox</string>
++    <string name="keybox_clear_summary">Turn it off and delete the keybox from this profile</string>
++    <string name="keybox_clear_confirm">Remove the keybox from this profile?</string>
++    <string name="keybox_clear_button">Remove</string>
++    <string name="keybox_explanation">When this is on, Google Play services gets key attestations signed with your keybox instead of with this phone\'s own key. Nothing else changes for Play services, and other apps and profiles aren\'t affected.\n\nGoogle can still reject a keybox, so this doesn\'t guarantee that Play Integrity passes.\n\nThe keybox stays in this profile on this phone. It isn\'t backed up, and it\'s deleted when Google Play services is uninstalled.</string>
  </resources>
 diff --git a/src/app/grapheneos/gmscompat/BinderGms2Gca.kt b/src/app/grapheneos/gmscompat/BinderGms2Gca.kt
 index be60a9cddb354bc73163524911cdab37bfd41c8d..6825f7156516cee09fbd0a964ab6692e2b1248c4 100644
@@ -121,7 +123,7 @@ index be60a9cddb354bc73163524911cdab37bfd41c8d..6825f7156516cee09fbd0a964ab6692e
  }
 diff --git a/src/app/grapheneos/gmscompat/keybox/KeyboxActivity.kt b/src/app/grapheneos/gmscompat/keybox/KeyboxActivity.kt
 new file mode 100644
-index 0000000000000000000000000000000000000000..4cfaa90444856ece70f67f80478b810234cdf6e4
+index 0000000000000000000000000000000000000000..ec9fe098efef48a112664daadac7905c8d8d9dfa
 --- /dev/null
 +++ b/src/app/grapheneos/gmscompat/keybox/KeyboxActivity.kt
 @@ -0,0 +1,137 @@
@@ -222,7 +224,7 @@ index 0000000000000000000000000000000000000000..4cfaa90444856ece70f67f80478b8102
 +                AlertDialog.Builder(context)
 +                    .setTitle(R.string.keybox_clear_title)
 +                    .setMessage(R.string.keybox_clear_confirm)
-+                    .setPositiveButton(R.string.keybox_clear_title) { _, _ ->
++                    .setPositiveButton(R.string.keybox_clear_button) { _, _ ->
 +                        KeyboxStore.clear()
 +                        refresh()
 +                    }
