@@ -2,20 +2,24 @@ title = "Play services key attestation keybox"
 description = """
 RELAXES ATTESTATION AUTHENTICITY (user approval 2026-11-05). Adds an off-by-default, per-user
 keybox for GrapheneOS' sandboxed Google Play services. When the user imports their own keybox and
-explicitly enables it, only the genuine Google Play services app can have its AndroidKeyStore
-attestation certificate chain rewritten with that keybox. No keybox is bundled or downloaded, no
-other app or system component sees a changed chain, and Play receives no permission, privilege or
-sandbox exception. The setting, imported key material and hook are per user/profile. Stock behavior
-is unchanged while Play services is absent, no keybox is configured, the feature is disabled or the
+explicitly enables it, only the genuine Google Play services app has its AndroidKeyStore attestation
+certificate chain re-signed with that keybox, and the RootOfTrust inside that attestation is
+rewritten to report deviceLocked = true and verifiedBootState = Verified (this is what lets Play
+Integrity pass; the device's actual verified boot is not changed, only what Play's attestation
+reports). The attested key stays the caller's own key. No keybox is bundled or downloaded, no other
+app or system component sees a changed chain, and Play receives no permission, privilege or sandbox
+exception. The setting, imported key material and hook are per user/profile. Stock behavior is
+unchanged while Play services is absent, no keybox is configured, the feature is disabled or the
 keybox's certificates are expired / not yet valid.
 
 frameworks/base: AndroidKeyStoreSpi.engineGetCertificateChain() passes the chain to PlayKeyboxHooks
 (engineGetCertificate() follows the rewritten chain). The hook acts only when GmsCompat is enabled
 in this process and its PackageId is GMS_CORE (signature-verified, unprivileged), asks GmsCompatApp
-via IGms2Gca.rewriteAttestationChain, and rejects a reply whose leaf public key or attestation
-extension differ from the original. PlayKeybox: strict parser for the common AndroidAttestation
-keybox XML (EC/RSA, SEC1/PKCS#1/PKCS#8 PEM or raw base64, chain must reach a self-signed root and
-match the private key) and the leaf re-signer. Tests: core/tests/coretests PlayKeyboxTest.
+via IGms2Gca.rewriteAttestationChain, and rejects a reply whose attested (leaf) public key differs
+from the original. PlayKeybox: strict parser for the common AndroidAttestation keybox XML (EC/RSA,
+SEC1/PKCS#1/PKCS#8 PEM or raw base64, chain must reach a self-signed root and match the private key),
+the leaf re-signer and the RootOfTrust rewrite (lockBootState). Tests: core/tests/coretests
+PlayKeyboxTest, including an assertion that the re-signed leaf reports locked + Verified.
 packages/apps/GmsCompat: KeyboxActivity (SHOW_UI protected) to import / switch / delete,
 KeyboxStore (validated XML as 0600 files in the user's credential-encrypted no_backup dir; a
 rejected import changes nothing), BinderGms2Gca UID check, deletion on PACKAGE_FULLY_REMOVED of

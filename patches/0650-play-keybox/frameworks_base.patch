@@ -15,13 +15,14 @@ PlayKeybox parses the common AndroidAttestation keybox XML strictly (EC and RSA,
 PEM, complete chain to a self-signed root, matching private key) and does the re-signing.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
 ---
  .../android/internal/gmscompat/IGms2Gca.aidl  |   4 +
- .../internal/gmscompat/PlayKeybox.java        | 681 ++++++++++++++++++
- .../internal/gmscompat/PlayKeyboxHooks.java   |  63 ++
- .../internal/gmscompat/PlayKeyboxTest.java    | 255 +++++++
+ .../internal/gmscompat/PlayKeybox.java        | 775 ++++++++++++++++++
+ .../internal/gmscompat/PlayKeyboxHooks.java   |  61 ++
+ .../internal/gmscompat/PlayKeyboxTest.java    | 306 +++++++
  .../keystore2/AndroidKeyStoreSpi.java         |  11 +-
- 5 files changed, 1013 insertions(+), 1 deletion(-)
+ 5 files changed, 1156 insertions(+), 1 deletion(-)
  create mode 100644 core/java/com/android/internal/gmscompat/PlayKeybox.java
  create mode 100644 core/java/com/android/internal/gmscompat/PlayKeyboxHooks.java
  create mode 100644 core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java
@@ -41,10 +42,10 @@ index a0b5363fd0749cea2cc80a99fe60720c0f53bc1c..0a9ba05b122933c224f792d21ab810ac
  }
 diff --git a/core/java/com/android/internal/gmscompat/PlayKeybox.java b/core/java/com/android/internal/gmscompat/PlayKeybox.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..42b8a184b7dc6f3f6e4c69489d52dab96af3070d
+index 0000000000000000000000000000000000000000..8ed05a419f221d4fd126b2e32145b50db9a32e4d
 --- /dev/null
 +++ b/core/java/com/android/internal/gmscompat/PlayKeybox.java
-@@ -0,0 +1,681 @@
+@@ -0,0 +1,775 @@
 +/*
 + * Copyright (C) 2026 The Graphite Project
 + *
@@ -63,14 +64,26 @@ index 0000000000000000000000000000000000000000..42b8a184b7dc6f3f6e4c69489d52dab9
 +
 +package com.android.internal.gmscompat;
 +
++import com.android.internal.org.bouncycastle.asn1.ASN1Boolean;
++import com.android.internal.org.bouncycastle.asn1.ASN1Encodable;
++import com.android.internal.org.bouncycastle.asn1.ASN1EncodableVector;
++import com.android.internal.org.bouncycastle.asn1.ASN1Encoding;
++import com.android.internal.org.bouncycastle.asn1.ASN1Enumerated;
 +import com.android.internal.org.bouncycastle.asn1.ASN1InputStream;
 +import com.android.internal.org.bouncycastle.asn1.ASN1ObjectIdentifier;
++import com.android.internal.org.bouncycastle.asn1.ASN1OctetString;
 +import com.android.internal.org.bouncycastle.asn1.ASN1Primitive;
++import com.android.internal.org.bouncycastle.asn1.ASN1Sequence;
++import com.android.internal.org.bouncycastle.asn1.ASN1TaggedObject;
++import com.android.internal.org.bouncycastle.asn1.DEROctetString;
++import com.android.internal.org.bouncycastle.asn1.DERSequence;
++import com.android.internal.org.bouncycastle.asn1.DERTaggedObject;
 +import com.android.internal.org.bouncycastle.asn1.pkcs.PrivateKeyInfo;
 +import com.android.internal.org.bouncycastle.asn1.pkcs.RSAPrivateKey;
 +import com.android.internal.org.bouncycastle.asn1.sec.ECPrivateKey;
 +import com.android.internal.org.bouncycastle.asn1.x500.X500Name;
 +import com.android.internal.org.bouncycastle.asn1.x509.AlgorithmIdentifier;
++import com.android.internal.org.bouncycastle.asn1.x509.Extension;
 +import com.android.internal.org.bouncycastle.asn1.x9.X9ObjectIdentifiers;
 +import com.android.internal.org.bouncycastle.cert.X509CertificateHolder;
 +import com.android.internal.org.bouncycastle.cert.X509v3CertificateBuilder;
@@ -207,8 +220,13 @@ index 0000000000000000000000000000000000000000..42b8a184b7dc6f3f6e4c69489d52dab9
 +                    leafHolder.getSubject(),
 +                    leafHolder.getSubjectPublicKeyInfo());
 +            for (Object oid : leafHolder.getExtensions().getExtensionOIDs()) {
-+                builder.addExtension(leafHolder.getExtension(
-+                        new ASN1ObjectIdentifier(oid.toString())));
++                Extension extension = leafHolder.getExtension(new ASN1ObjectIdentifier(oid.toString()));
++                if (ATTESTATION_EXTENSION_OID.equals(oid.toString())) {
++                    // Report a locked bootloader and verified boot; without this the re-signed
++                    // chain still carries the device's real (unlocked) boot state and fails.
++                    extension = lockBootState(extension);
++                }
++                builder.addExtension(extension);
 +            }
 +
 +            String signatureAlgorithm = signatureAlgorithm(keybox.privateKey.getAlgorithm());
@@ -226,6 +244,83 @@ index 0000000000000000000000000000000000000000..42b8a184b7dc6f3f6e4c69489d52dab9
 +            }
 +            return result;
 +        }
++    }
++
++    // KeyMint RootOfTrust tag inside an AuthorizationList, and VerifiedBootState.Verified.
++    private static final int ROOT_OF_TRUST_TAG = 704;
++    private static final int VERIFIED_BOOT_STATE_VERIFIED = 0;
++
++    /**
++     * Rewrites the Android key-attestation record so RootOfTrust reads deviceLocked = true and
++     * verifiedBootState = Verified, keeping the real verified-boot key and hash. The challenge,
++     * attested key and every other field are untouched. On any parsing problem the original
++     * extension is returned unchanged, so attestation never breaks.
++     */
++    private static Extension lockBootState(Extension attestation) {
++        try {
++            ASN1Sequence keyDescription =
++                    ASN1Sequence.getInstance(attestation.getExtnValue().getOctets());
++            ASN1Encodable[] fields = keyDescription.toArray();
++            boolean changed = false;
++            for (int i = 0; i < fields.length; i++) {
++                if (!(fields[i] instanceof ASN1Sequence)) {
++                    continue; // only the software/tee AuthorizationLists are sequences
++                }
++                ASN1Sequence locked = lockAuthorizationList((ASN1Sequence) fields[i]);
++                if (locked != null) {
++                    fields[i] = locked;
++                    changed = true;
++                }
++            }
++            if (!changed) {
++                return attestation;
++            }
++            byte[] der = new DERSequence(fields).getEncoded(ASN1Encoding.DER);
++            return new Extension(new ASN1ObjectIdentifier(ATTESTATION_EXTENSION_OID),
++                    attestation.isCritical(), new DEROctetString(der));
++        } catch (Exception e) {
++            return attestation;
++        }
++    }
++
++    private static ASN1Sequence lockAuthorizationList(ASN1Sequence authorizationList) {
++        ASN1EncodableVector out = new ASN1EncodableVector();
++        boolean found = false;
++        for (ASN1Encodable element : authorizationList) {
++            ASN1TaggedObject tagged = ASN1TaggedObject.getInstance(element);
++            if (tagged.getTagNo() == ROOT_OF_TRUST_TAG) {
++                ASN1Sequence rot = ASN1Sequence.getInstance(tagged.getBaseObject());
++                out.add(new DERTaggedObject(ROOT_OF_TRUST_TAG, lockRootOfTrust(rot)));
++                found = true;
++            } else {
++                out.add(tagged);
++            }
++        }
++        return found ? new DERSequence(out) : null;
++    }
++
++    private static ASN1Sequence lockRootOfTrust(ASN1Sequence rootOfTrust) {
++        byte[] bootKey = new byte[32];
++        try {
++            bootKey = ASN1OctetString.getInstance(rootOfTrust.getObjectAt(0)).getOctets();
++        } catch (Exception ignored) {
++        }
++        boolean hasHash = rootOfTrust.size() >= 4;
++        byte[] bootHash = new byte[32];
++        if (hasHash) {
++            try {
++                bootHash = ASN1OctetString.getInstance(rootOfTrust.getObjectAt(3)).getOctets();
++            } catch (Exception ignored) {
++            }
++        }
++        ASN1EncodableVector locked = new ASN1EncodableVector();
++        locked.add(new DEROctetString(bootKey));
++        locked.add(ASN1Boolean.TRUE);
++        locked.add(new ASN1Enumerated(VERIFIED_BOOT_STATE_VERIFIED));
++        if (hasHash) {
++            locked.add(new DEROctetString(bootHash));
++        }
++        return new DERSequence(locked);
 +    }
 +
 +    private static final class Keybox {
@@ -728,10 +823,10 @@ index 0000000000000000000000000000000000000000..42b8a184b7dc6f3f6e4c69489d52dab9
 +}
 diff --git a/core/java/com/android/internal/gmscompat/PlayKeyboxHooks.java b/core/java/com/android/internal/gmscompat/PlayKeyboxHooks.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..3f600988901203b48d244b6c8d4001e40da7cb14
+index 0000000000000000000000000000000000000000..02daaeee4317c863e9220400c300786f75765364
 --- /dev/null
 +++ b/core/java/com/android/internal/gmscompat/PlayKeyboxHooks.java
-@@ -0,0 +1,63 @@
+@@ -0,0 +1,61 @@
 +/*
 + * Copyright (C) 2026 The Graphite Project
 + * SPDX-License-Identifier: Apache-2.0
@@ -778,13 +873,11 @@ index 0000000000000000000000000000000000000000..3f600988901203b48d244b6c8d4001e4
 +                return chain;
 +            }
 +            X509Certificate replacementLeaf = (X509Certificate) replacement[0];
-+            // Never allow the helper to change which application key is attested or which
-+            // KeyMint authorization list is being signed.
++            // The boot state in the attestation is rewritten on purpose, but the attested key
++            // must stay the caller's own key: never let the helper re-key the attestation.
 +            if (!Arrays.equals(leaf.getPublicKey().getEncoded(),
-+                    replacementLeaf.getPublicKey().getEncoded())
-+                    || !Arrays.equals(leaf.getExtensionValue(PlayKeybox.ATTESTATION_EXTENSION_OID),
-+                    replacementLeaf.getExtensionValue(PlayKeybox.ATTESTATION_EXTENSION_OID))) {
-+                Log.w(TAG, "Rejected a chain that changed the application key or attestation");
++                    replacementLeaf.getPublicKey().getEncoded())) {
++                Log.w(TAG, "Rejected a chain that changed the application key");
 +                return chain;
 +            }
 +            return replacement;
@@ -797,10 +890,10 @@ index 0000000000000000000000000000000000000000..3f600988901203b48d244b6c8d4001e4
 +}
 diff --git a/core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java b/core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..bc40baef183096ca4270e09fe2e2ce80ad7c2644
+index 0000000000000000000000000000000000000000..ed86ca5daa9abc668becc3b1003c8776ffc0dfc3
 --- /dev/null
 +++ b/core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java
-@@ -0,0 +1,255 @@
+@@ -0,0 +1,306 @@
 +/*
 + * Copyright (C) 2026 The Graphite Project
 + * SPDX-License-Identifier: Apache-2.0
@@ -816,8 +909,18 @@ index 0000000000000000000000000000000000000000..bc40baef183096ca4270e09fe2e2ce80
 +import androidx.test.ext.junit.runners.AndroidJUnit4;
 +import androidx.test.filters.SmallTest;
 +
++import org.bouncycastle.asn1.ASN1Boolean;
++import org.bouncycastle.asn1.ASN1Encodable;
++import org.bouncycastle.asn1.ASN1EncodableVector;
++import org.bouncycastle.asn1.ASN1Enumerated;
++import org.bouncycastle.asn1.ASN1Integer;
 +import org.bouncycastle.asn1.ASN1ObjectIdentifier;
++import org.bouncycastle.asn1.ASN1OctetString;
++import org.bouncycastle.asn1.ASN1Sequence;
++import org.bouncycastle.asn1.ASN1TaggedObject;
 +import org.bouncycastle.asn1.DEROctetString;
++import org.bouncycastle.asn1.DERSequence;
++import org.bouncycastle.asn1.DERTaggedObject;
 +import org.bouncycastle.asn1.x500.X500Name;
 +import org.bouncycastle.asn1.x509.Extension;
 +import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
@@ -934,6 +1037,41 @@ index 0000000000000000000000000000000000000000..bc40baef183096ca4270e09fe2e2ce80
 +                info.getPrivateKeyAlgorithm().getParameters()).getEncoded();
 +    }
 +
++    /** A minimal but structurally real KeyDescription with a RootOfTrust in teeEnforced. */
++    private static byte[] attestationRecord(boolean deviceLocked, int verifiedBootState)
++            throws Exception {
++        ASN1EncodableVector rot = new ASN1EncodableVector();
++        rot.add(new DEROctetString(new byte[32]));           // verifiedBootKey
++        rot.add(ASN1Boolean.getInstance(deviceLocked));      // deviceLocked
++        rot.add(new ASN1Enumerated(verifiedBootState));      // verifiedBootState
++        rot.add(new DEROctetString(new byte[32]));           // verifiedBootHash
++        ASN1EncodableVector tee = new ASN1EncodableVector();
++        tee.add(new DERTaggedObject(704, new DERSequence(rot)));
++        ASN1EncodableVector keyDescription = new ASN1EncodableVector();
++        keyDescription.add(new ASN1Integer(200));            // attestationVersion
++        keyDescription.add(new ASN1Enumerated(1));           // attestationSecurityLevel
++        keyDescription.add(new ASN1Integer(200));            // keymasterVersion
++        keyDescription.add(new ASN1Enumerated(1));           // keymasterSecurityLevel
++        keyDescription.add(new DEROctetString("challenge".getBytes()));
++        keyDescription.add(new DEROctetString(new byte[0])); // uniqueId
++        keyDescription.add(new DERSequence());               // softwareEnforced
++        keyDescription.add(new DERSequence(tee));            // teeEnforced
++        return new DERSequence(keyDescription).getEncoded();
++    }
++
++    /** Returns { deviceLocked, verifiedBootState == Verified } from a leaf's attestation. */
++    private static boolean[] rootOfTrust(X509Certificate leaf) throws Exception {
++        byte[] octets = ASN1OctetString.getInstance(
++                leaf.getExtensionValue(PlayKeybox.ATTESTATION_EXTENSION_OID)).getOctets();
++        ASN1Sequence keyDescription = ASN1Sequence.getInstance(octets);
++        ASN1Sequence tee = (ASN1Sequence) keyDescription.getObjectAt(7);
++        ASN1TaggedObject tagged = ASN1TaggedObject.getInstance(tee.getObjectAt(0));
++        ASN1Sequence rot = ASN1Sequence.getInstance(tagged.getBaseObject());
++        boolean locked = ASN1Boolean.getInstance(rot.getObjectAt(1)).isTrue();
++        int state = ASN1Enumerated.getInstance(rot.getObjectAt(2)).getValue().intValue();
++        return new boolean[] { locked, state == 0 };
++    }
++
 +    private static String pem(String type, byte[] der) {
 +        return "-----BEGIN " + type + "-----\n"
 +                + Base64.getMimeEncoder(64, new byte[] { '\n' }).encodeToString(der)
@@ -972,11 +1110,17 @@ index 0000000000000000000000000000000000000000..bc40baef183096ca4270e09fe2e2ce80
 +        X509Certificate replacement = (X509Certificate) rewritten[0];
 +        assertArrayEquals(applicationKey.getPublic().getEncoded(),
 +                replacement.getPublicKey().getEncoded());
-+        assertArrayEquals(realLeaf.getExtensionValue(PlayKeybox.ATTESTATION_EXTENSION_OID),
-+                replacement.getExtensionValue(PlayKeybox.ATTESTATION_EXTENSION_OID));
 +        replacement.verify(keybox.issuerKey.getPublic());
 +        assertArrayEquals(keybox.issuer.getEncoded(), rewritten[1].getEncoded());
 +        assertArrayEquals(keybox.root.getEncoded(), rewritten[2].getEncoded());
++
++        // The real leaf reports an unlocked, unverified device; the rewrite must flip RootOfTrust
++        // to locked + Verified while leaving the attestation's other fields in place.
++        boolean[] real = rootOfTrust(realLeaf);
++        assertEquals(false, real[0]);
++        boolean[] spoofed = rootOfTrust(replacement);
++        assertEquals("deviceLocked", true, spoofed[0]);
++        assertEquals("verifiedBootState Verified", true, spoofed[1]);
 +
 +        X509Certificate ordinaryLeaf = certificate("Ordinary leaf", "Real issuer",
 +                applicationKey.getPublic(), realIssuerKey.getPrivate(), realIssuerKey.getPublic(),
@@ -1016,7 +1160,7 @@ index 0000000000000000000000000000000000000000..bc40baef183096ca4270e09fe2e2ce80
 +        if (attested) {
 +            builder.addExtension(new Extension(
 +                    new ASN1ObjectIdentifier(PlayKeybox.ATTESTATION_EXTENSION_OID), false,
-+                    new DEROctetString(new byte[] { 1, 2, 3, 4 })));
++                    new DEROctetString(attestationRecord(false, 2))));
 +        }
 +        String signatureAlgorithm = "EC".equals(signingKey.getAlgorithm())
 +                ? "SHA256withECDSA" : "SHA256withRSA";
