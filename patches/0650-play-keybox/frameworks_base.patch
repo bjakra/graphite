@@ -1,0 +1,1094 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Thu, 5 Nov 2026 19:35:53 +0100
+Subject: [PATCH] gmscompat: optional keybox for sandboxed Play services' key
+ attestation
+
+AndroidKeyStoreSpi hands attestation chains to PlayKeyboxHooks, which only acts in the
+unprivileged, signature-verified Play services process (GmsCompat enabled and PackageId.GMS_CORE).
+It sends the chain to GmsCompatApp (new IGms2Gca.rewriteAttestationChain), which re-signs the
+attested leaf with the user's keybox if they enabled one. The private key never leaves GmsCompatApp.
+The returned leaf must keep the original public key and attestation extension; anything else, and
+every other process, gets the stock chain. getCertificate() follows the rewritten chain.
+
+PlayKeybox parses the common AndroidAttestation keybox XML strictly (EC and RSA, SEC1/PKCS#1/PKCS#8
+PEM, complete chain to a self-signed root, matching private key) and does the re-signing.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../android/internal/gmscompat/IGms2Gca.aidl  |   4 +
+ .../internal/gmscompat/PlayKeybox.java        | 681 ++++++++++++++++++
+ .../internal/gmscompat/PlayKeyboxHooks.java   |  63 ++
+ .../internal/gmscompat/PlayKeyboxTest.java    | 255 +++++++
+ .../keystore2/AndroidKeyStoreSpi.java         |  11 +-
+ 5 files changed, 1013 insertions(+), 1 deletion(-)
+ create mode 100644 core/java/com/android/internal/gmscompat/PlayKeybox.java
+ create mode 100644 core/java/com/android/internal/gmscompat/PlayKeyboxHooks.java
+ create mode 100644 core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java
+
+diff --git a/core/java/com/android/internal/gmscompat/IGms2Gca.aidl b/core/java/com/android/internal/gmscompat/IGms2Gca.aidl
+index a0b5363fd0749cea2cc80a99fe60720c0f53bc1c..0a9ba05b122933c224f792d21ab810ac71e2fe69 100644
+--- a/core/java/com/android/internal/gmscompat/IGms2Gca.aidl
++++ b/core/java/com/android/internal/gmscompat/IGms2Gca.aidl
+@@ -45,4 +45,8 @@ interface IGms2Gca {
+                                   @nullable String serviceClassName);
+ 
+     oneway void maybeShowRcsRequirementsNotification(boolean isTs43Verification);
++
++    // Re-sign an Android key-attestation leaf with the current user's Play keybox. Returns null
++    // when the feature is off, no valid keybox is configured, or this is not an attestation chain.
++    @nullable byte[] rewriteAttestationChain(in byte[] chain);
+ }
+diff --git a/core/java/com/android/internal/gmscompat/PlayKeybox.java b/core/java/com/android/internal/gmscompat/PlayKeybox.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..42b8a184b7dc6f3f6e4c69489d52dab96af3070d
+--- /dev/null
++++ b/core/java/com/android/internal/gmscompat/PlayKeybox.java
+@@ -0,0 +1,681 @@
++/*
++ * Copyright (C) 2026 The Graphite Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.internal.gmscompat;
++
++import com.android.internal.org.bouncycastle.asn1.ASN1InputStream;
++import com.android.internal.org.bouncycastle.asn1.ASN1ObjectIdentifier;
++import com.android.internal.org.bouncycastle.asn1.ASN1Primitive;
++import com.android.internal.org.bouncycastle.asn1.pkcs.PrivateKeyInfo;
++import com.android.internal.org.bouncycastle.asn1.pkcs.RSAPrivateKey;
++import com.android.internal.org.bouncycastle.asn1.sec.ECPrivateKey;
++import com.android.internal.org.bouncycastle.asn1.x500.X500Name;
++import com.android.internal.org.bouncycastle.asn1.x509.AlgorithmIdentifier;
++import com.android.internal.org.bouncycastle.asn1.x9.X9ObjectIdentifiers;
++import com.android.internal.org.bouncycastle.cert.X509CertificateHolder;
++import com.android.internal.org.bouncycastle.cert.X509v3CertificateBuilder;
++import com.android.internal.org.bouncycastle.operator.ContentSigner;
++import com.android.internal.org.bouncycastle.operator.DefaultSignatureAlgorithmIdentifierFinder;
++
++import org.xmlpull.v1.XmlPullParser;
++import org.xmlpull.v1.XmlPullParserFactory;
++
++import java.io.ByteArrayInputStream;
++import java.io.ByteArrayOutputStream;
++import java.io.IOException;
++import java.io.OutputStream;
++import java.io.StringReader;
++import java.nio.charset.StandardCharsets;
++import java.security.GeneralSecurityException;
++import java.security.KeyFactory;
++import java.security.PrivateKey;
++import java.security.PublicKey;
++import java.security.SecureRandom;
++import java.security.Signature;
++import java.security.cert.Certificate;
++import java.security.cert.CertificateException;
++import java.security.cert.CertificateFactory;
++import java.security.cert.X509Certificate;
++import java.security.spec.PKCS8EncodedKeySpec;
++import java.security.spec.RSAPrivateCrtKeySpec;
++import java.util.ArrayList;
++import java.util.Arrays;
++import java.util.Base64;
++import java.util.Collections;
++import java.util.Date;
++import java.util.LinkedHashMap;
++import java.util.List;
++import java.util.Locale;
++import java.util.Map;
++import java.util.regex.Pattern;
++
++/**
++ * Parser and leaf re-signer for a user-supplied Android attestation keybox.
++ *
++ * <p>The parsed representation is immutable and is intended to remain in the GmsCompat app
++ * process. Only re-signed certificate chains are sent back to Play services; the private key is
++ * never sent over Binder.</p>
++ *
++ * @hide
++ */
++public final class PlayKeybox {
++    public static final int MAX_XML_BYTES = 64 * 1024;
++    public static final String ATTESTATION_EXTENSION_OID = "1.3.6.1.4.1.11129.2.1.17";
++
++    private static final Pattern BASE64 = Pattern.compile("[A-Za-z0-9+/]*={0,2}");
++
++    private PlayKeybox() {}
++
++    /** An immutable, fully validated keybox. */
++    public static final class ParsedKeybox {
++        private final Map<String, Keybox> keyboxes;
++        private final String algorithms;
++        private final Date earliestExpiry;
++
++        private ParsedKeybox(Map<String, Keybox> keyboxes) {
++            this.keyboxes = Collections.unmodifiableMap(new LinkedHashMap<>(keyboxes));
++            long expiry = Long.MAX_VALUE;
++            for (Keybox keybox : keyboxes.values()) {
++                for (X509Certificate certificate : keybox.certificates) {
++                    expiry = Math.min(expiry, certificate.getNotAfter().getTime());
++                }
++            }
++            earliestExpiry = new Date(expiry);
++            algorithms = String.join(", ", keyboxes.keySet());
++        }
++
++        public String getAlgorithms() {
++            return algorithms;
++        }
++
++        public Date getEarliestExpiry() {
++            return new Date(earliestExpiry.getTime());
++        }
++
++        public boolean isValidNow() {
++            Date now = new Date();
++            for (Keybox keybox : keyboxes.values()) {
++                if (!keybox.isValid(now)) return false;
++            }
++            return true;
++        }
++
++        /**
++         * Re-signs an attested leaf and appends the matching keybox chain. All leaf fields,
++         * including its public key and attestation extension, are preserved.
++         *
++         * @return a replacement chain, the input chain if already signed by this keybox, or null
++         *         if the input is not an Android key-attestation chain
++         */
++        public Certificate[] maybeRewrite(Certificate[] chain) throws Exception {
++            if (chain == null || chain.length < 2 || !(chain[0] instanceof X509Certificate)) {
++                return null;
++            }
++            X509Certificate leaf = (X509Certificate) chain[0];
++            if (leaf.getExtensionValue(ATTESTATION_EXTENSION_OID) == null) {
++                return null;
++            }
++
++            String subjectAlgorithm = leaf.getPublicKey().getAlgorithm();
++            Keybox keybox = keyboxes.get(normalizeAlgorithm(subjectAlgorithm));
++            if (keybox == null) {
++                String alternate = "EC".equalsIgnoreCase(subjectAlgorithm) ? "RSA" : "EC";
++                keybox = keyboxes.get(alternate);
++            }
++            if (keybox == null || !keybox.isValid(new Date())) {
++                return null;
++            }
++
++            X509Certificate issuer = keybox.certificates.get(0);
++            if (chain[1] instanceof X509Certificate
++                    && Arrays.equals(chain[1].getEncoded(), issuer.getEncoded())) {
++                try {
++                    leaf.verify(issuer.getPublicKey());
++                    return chain;
++                } catch (GeneralSecurityException ignored) {
++                    // The issuer name matches but the signature does not; replace the leaf.
++                }
++            }
++
++            X509CertificateHolder leafHolder = new X509CertificateHolder(leaf.getEncoded());
++            X500Name issuerName = new X509CertificateHolder(issuer.getEncoded()).getSubject();
++            X509v3CertificateBuilder builder = new X509v3CertificateBuilder(
++                    issuerName,
++                    leafHolder.getSerialNumber(),
++                    leafHolder.getNotBefore(),
++                    leafHolder.getNotAfter(),
++                    leafHolder.getSubject(),
++                    leafHolder.getSubjectPublicKeyInfo());
++            for (Object oid : leafHolder.getExtensions().getExtensionOIDs()) {
++                builder.addExtension(leafHolder.getExtension(
++                        new ASN1ObjectIdentifier(oid.toString())));
++            }
++
++            String signatureAlgorithm = signatureAlgorithm(keybox.privateKey.getAlgorithm());
++            ContentSigner signer = new JcaContentSigner(signatureAlgorithm, keybox.privateKey);
++            X509CertificateHolder replacement = builder.build(signer);
++            CertificateFactory factory = CertificateFactory.getInstance("X.509");
++            X509Certificate replacementLeaf = (X509Certificate) factory.generateCertificate(
++                    new ByteArrayInputStream(replacement.getEncoded()));
++            replacementLeaf.verify(issuer.getPublicKey());
++
++            Certificate[] result = new Certificate[keybox.certificates.size() + 1];
++            result[0] = replacementLeaf;
++            for (int i = 0; i < keybox.certificates.size(); i++) {
++                result[i + 1] = keybox.certificates.get(i);
++            }
++            return result;
++        }
++    }
++
++    private static final class Keybox {
++        final PrivateKey privateKey;
++        final List<X509Certificate> certificates;
++
++        Keybox(PrivateKey privateKey, List<X509Certificate> certificates) {
++            this.privateKey = privateKey;
++            this.certificates = certificates;
++        }
++
++        boolean isValid(Date now) {
++            for (X509Certificate certificate : certificates) {
++                if (now.before(certificate.getNotBefore()) || now.after(certificate.getNotAfter())) {
++                    return false;
++                }
++            }
++            return true;
++        }
++    }
++
++    /** Parses and validates all key blocks before publishing an immutable result. */
++    public static ParsedKeybox parse(byte[] xmlBytes) throws Exception {
++        return parse(xmlBytes, true);
++    }
++
++    /** Parses stored data without deleting it merely because its validity dates have passed. */
++    public static ParsedKeybox parseStored(byte[] xmlBytes) throws Exception {
++        return parse(xmlBytes, false);
++    }
++
++    private static ParsedKeybox parse(byte[] xmlBytes, boolean checkValidity) throws Exception {
++        if (xmlBytes == null || xmlBytes.length == 0 || xmlBytes.length > MAX_XML_BYTES) {
++            throw new IllegalArgumentException("Keybox must contain between 1 and "
++                    + MAX_XML_BYTES + " bytes");
++        }
++        String xml = StandardCharsets.UTF_8.newDecoder()
++                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
++                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
++                .decode(java.nio.ByteBuffer.wrap(xmlBytes)).toString();
++        if (xml.startsWith("\uFEFF")) xml = xml.substring(1);
++        Map<String, Keybox> result = new LinkedHashMap<>();
++
++        XmlPullParserFactory factory = XmlPullParserFactory.newInstance();
++        factory.setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, false);
++        XmlPullParser parser = factory.newPullParser();
++        parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false);
++        parser.setInput(new StringReader(xml));
++
++        boolean sawRoot = false;
++        boolean rootClosed = false;
++        boolean sawNumber = false;
++        boolean sawAnyKeybox = false;
++        boolean inKeybox = false;
++        boolean inKey = false;
++        boolean inCertificateChain = false;
++        boolean sawPrivateKey = false;
++        boolean sawCertificateChain = false;
++        int keysInBox = 0;
++        String algorithm = null;
++        String privateKeyPem = null;
++        List<String> certificates = new ArrayList<>();
++        StringBuilder text = null;
++        StringBuilder numberText = null;
++
++        int event = parser.getEventType();
++        while (event != XmlPullParser.END_DOCUMENT) {
++            String name = parser.getName();
++            int depth = parser.getDepth();
++            switch (event) {
++                case XmlPullParser.START_TAG:
++                    if (depth == 1) {
++                        require(sawRoot == false && "AndroidAttestation".equals(name));
++                        sawRoot = true;
++                    } else if (depth == 2 && "Keybox".equals(name)) {
++                        require(sawRoot && !inKeybox);
++                        inKeybox = true;
++                        sawAnyKeybox = true;
++                        keysInBox = 0;
++                    } else if (depth == 2 && "NumberOfKeyboxes".equals(name)) {
++                        require(!sawAnyKeybox && !sawNumber);
++                        sawNumber = true;
++                        numberText = new StringBuilder();
++                    } else if (depth == 3 && "Key".equals(name)) {
++                        require(inKeybox && !inKey);
++                        inKey = true;
++                        keysInBox++;
++                        algorithm = parser.getAttributeValue(null, "algorithm");
++                        privateKeyPem = null;
++                        certificates.clear();
++                        sawPrivateKey = false;
++                        sawCertificateChain = false;
++                    } else if (depth == 4 && "PrivateKey".equals(name)) {
++                        require(inKey && !sawPrivateKey && !sawCertificateChain);
++                        sawPrivateKey = true;
++                        text = new StringBuilder();
++                    } else if (depth == 4 && "CertificateChain".equals(name)) {
++                        require(inKey && sawPrivateKey && !sawCertificateChain);
++                        sawCertificateChain = true;
++                        inCertificateChain = true;
++                    } else if (depth == 5 && "NumberOfCertificates".equals(name)) {
++                        require(inCertificateChain && certificates.isEmpty() && text == null);
++                        numberText = new StringBuilder();
++                    } else if (depth == 5 && "Certificate".equals(name)) {
++                        require(inCertificateChain && text == null);
++                        text = new StringBuilder();
++                    } else {
++                        throw new IllegalArgumentException("Unexpected XML element");
++                    }
++                    checkAttributes(parser, name);
++                    break;
++                case XmlPullParser.TEXT:
++                case XmlPullParser.CDSECT:
++                case XmlPullParser.IGNORABLE_WHITESPACE:
++                    if (text != null) {
++                        text.append(parser.getText());
++                    } else if (numberText != null) {
++                        numberText.append(parser.getText());
++                    } else if (!parser.isWhitespace()) {
++                        throw new IllegalArgumentException("Unexpected XML text");
++                    }
++                    break;
++                case XmlPullParser.END_TAG:
++                    if (depth == 5 && "Certificate".equals(name)) {
++                        require(inCertificateChain && text != null);
++                        certificates.add(text.toString().trim());
++                        text = null;
++                    } else if (depth == 4 && "PrivateKey".equals(name)) {
++                        require(sawPrivateKey && text != null);
++                        privateKeyPem = text.toString().trim();
++                        text = null;
++                    } else if (depth == 4 && "CertificateChain".equals(name)) {
++                        require(inCertificateChain && !certificates.isEmpty());
++                        inCertificateChain = false;
++                    } else if (depth == 3 && "Key".equals(name)) {
++                        require(inKey && sawPrivateKey && sawCertificateChain
++                                && !inCertificateChain && privateKeyPem != null
++                                && !privateKeyPem.isEmpty() && !certificates.isEmpty());
++                        Keybox keybox = parseKey(algorithm, privateKeyPem, certificates,
++                                checkValidity);
++                        String normalized = normalizeAlgorithm(algorithm);
++                        if (result.put(normalized, keybox) != null) {
++                            throw new IllegalArgumentException("Duplicate " + normalized + " key");
++                        }
++                        inKey = false;
++                        algorithm = null;
++                    } else if (depth == 2 && "Keybox".equals(name)) {
++                        require(inKeybox && !inKey && keysInBox > 0);
++                        inKeybox = false;
++                    } else if ((depth == 2 && "NumberOfKeyboxes".equals(name))
++                            || (depth == 5 && "NumberOfCertificates".equals(name))) {
++                        // Advisory counts, as in other keybox parsers: checked for syntax only.
++                        require(numberText != null);
++                        int declared = Integer.parseInt(numberText.toString().trim());
++                        require(declared >= 0);
++                        numberText = null;
++                    } else if (depth == 1 && "AndroidAttestation".equals(name)) {
++                        require(sawRoot && !inKeybox && !inKey && !result.isEmpty());
++                        rootClosed = true;
++                    } else {
++                        throw new IllegalArgumentException("Unexpected XML end element");
++                    }
++                    break;
++                case XmlPullParser.START_DOCUMENT:
++                case XmlPullParser.COMMENT:
++                    break;
++                default:
++                    throw new IllegalArgumentException("Unexpected XML content");
++            }
++            event = parser.next();
++        }
++        require(sawRoot && rootClosed && !inKeybox && !inKey && !result.isEmpty());
++        return new ParsedKeybox(result);
++    }
++
++    private static void require(boolean condition) {
++        if (!condition) throw new IllegalArgumentException("Invalid keybox XML structure");
++    }
++
++    /**
++     * Attributes of the common keybox format: Key needs "algorithm", Keybox may name a
++     * "DeviceID", PrivateKey and Certificate may say format="pem". Anything else is rejected.
++     */
++    private static void checkAttributes(XmlPullParser parser, String element) {
++        boolean sawAlgorithm = false;
++        for (int i = 0; i < parser.getAttributeCount(); i++) {
++            String attribute = parser.getAttributeName(i);
++            String value = parser.getAttributeValue(i);
++            if ("Key".equals(element) && "algorithm".equals(attribute)) {
++                sawAlgorithm = true;
++            } else if ("Keybox".equals(element) && "DeviceID".equals(attribute)) {
++                // Informational only.
++            } else if (("PrivateKey".equals(element) || "Certificate".equals(element))
++                    && "format".equals(attribute)) {
++                require("pem".equalsIgnoreCase(value));
++            } else {
++                throw new IllegalArgumentException("Unexpected XML attribute");
++            }
++        }
++        require(!"Key".equals(element) || sawAlgorithm);
++    }
++
++    private static Keybox parseKey(String algorithm, String privateKeyPem,
++            List<String> certificatePems, boolean checkValidity) throws Exception {
++        String normalized = normalizeAlgorithm(algorithm);
++        PrivateKey privateKey = parsePrivateKey(privateKeyPem, normalized);
++        CertificateFactory factory = CertificateFactory.getInstance("X.509");
++        List<X509Certificate> certificates = new ArrayList<>();
++        for (String pem : certificatePems) {
++            PemData data = parsePemContent(pem);
++            require(data.type == null || "CERTIFICATE".equals(data.type));
++            byte[] der = data.bytes;
++            readSingleAsn1(der);
++            certificates.add((X509Certificate) factory.generateCertificate(
++                    new ByteArrayInputStream(der)));
++        }
++        List<X509Certificate> ordered = orderChain(privateKey, normalized, certificates);
++        for (int i = 0; i < ordered.size(); i++) {
++            X509Certificate certificate = ordered.get(i);
++            if (checkValidity) certificate.checkValidity();
++            if (i + 1 < ordered.size()) {
++                X509Certificate issuer = ordered.get(i + 1);
++                if (!certificate.getIssuerX500Principal().equals(issuer.getSubjectX500Principal())) {
++                    throw new CertificateException("Certificate issuer mismatch");
++                }
++                certificate.verify(issuer.getPublicKey());
++            } else if (certificate.getSubjectX500Principal().equals(
++                    certificate.getIssuerX500Principal())) {
++                certificate.verify(certificate.getPublicKey());
++            }
++        }
++        return new Keybox(privateKey, Collections.unmodifiableList(ordered));
++    }
++
++    private static List<X509Certificate> orderChain(PrivateKey privateKey, String algorithm,
++            List<X509Certificate> input) throws Exception {
++        List<X509Certificate> unique = new ArrayList<>();
++        for (X509Certificate candidate : input) {
++            boolean duplicate = false;
++            for (X509Certificate existing : unique) {
++                if (Arrays.equals(existing.getEncoded(), candidate.getEncoded())) {
++                    duplicate = true;
++                    break;
++                }
++            }
++            if (!duplicate) unique.add(candidate);
++        }
++
++        X509Certificate leaf = null;
++        for (X509Certificate candidate : unique) {
++            if (!algorithm.equalsIgnoreCase(candidate.getPublicKey().getAlgorithm())) continue;
++            try {
++                verifyPrivateKey(privateKey, candidate.getPublicKey(), algorithm);
++            } catch (GeneralSecurityException ignored) {
++                continue;
++            }
++            if (leaf != null) throw new CertificateException("Ambiguous private key match");
++            leaf = candidate;
++        }
++        if (leaf == null) {
++            throw new CertificateException("No certificate matches the private key");
++        }
++
++        List<X509Certificate> ordered = new ArrayList<>();
++        List<X509Certificate> remaining = new ArrayList<>(unique);
++        X509Certificate current = leaf;
++        while (true) {
++            ordered.add(current);
++            remaining.remove(current);
++            if (current.getIssuerX500Principal().equals(current.getSubjectX500Principal())) {
++                try {
++                    current.verify(current.getPublicKey());
++                    break;
++                } catch (GeneralSecurityException ignored) {
++                    // A self-issued certificate can also be cross-signed.
++                }
++            }
++            X509Certificate next = null;
++            for (X509Certificate candidate : remaining) {
++                if (!current.getIssuerX500Principal().equals(candidate.getSubjectX500Principal())) {
++                    continue;
++                }
++                try {
++                    current.verify(candidate.getPublicKey());
++                } catch (GeneralSecurityException ignored) {
++                    continue;
++                }
++                if (next != null) throw new CertificateException("Ambiguous issuer certificate");
++                next = candidate;
++            }
++            if (next == null) {
++                throw new CertificateException("Incomplete certificate chain: no verified root");
++            }
++            current = next;
++        }
++        if (!remaining.isEmpty()) {
++            throw new CertificateException("Disconnected certificate chain");
++        }
++        return ordered;
++    }
++
++    private static void verifyPrivateKey(PrivateKey privateKey, PublicKey publicKey,
++            String algorithm) throws GeneralSecurityException {
++        byte[] challenge = new byte[32];
++        new SecureRandom().nextBytes(challenge);
++        String signatureAlgorithm = signatureAlgorithm(algorithm);
++        Signature signer = Signature.getInstance(signatureAlgorithm);
++        signer.initSign(privateKey);
++        signer.update(challenge);
++        byte[] signature = signer.sign();
++        Signature verifier = Signature.getInstance(signatureAlgorithm);
++        verifier.initVerify(publicKey);
++        verifier.update(challenge);
++        if (!verifier.verify(signature)) {
++            throw new GeneralSecurityException("Private key does not match certificate");
++        }
++    }
++
++    private static PrivateKey parsePrivateKey(String pem, String algorithm) throws Exception {
++        PemData data = parsePemContent(pem);
++        String pemType = data.type;
++        if ("EC".equals(algorithm)) {
++            require(pemType == null || "EC PRIVATE KEY".equals(pemType)
++                    || "PRIVATE KEY".equals(pemType));
++            if (!"PRIVATE KEY".equals(pemType)) {
++                return parseEcPrivateKey(data.bytes, pemType == null);
++            }
++        } else {
++            require(pemType == null || "RSA PRIVATE KEY".equals(pemType)
++                    || "PRIVATE KEY".equals(pemType));
++            if (!"PRIVATE KEY".equals(pemType)) {
++                return parseRsaPrivateKey(data.bytes, pemType == null);
++            }
++        }
++
++        return pkcs8PrivateKey(algorithm, readSingleAsn1(data.bytes));
++    }
++
++    // Keys are normalized to PKCS#8 and handed to the platform provider (Conscrypt): the
++    // platform's repackaged BouncyCastle provider doesn't register ECDSA signatures.
++    private static PrivateKey pkcs8PrivateKey(String algorithm, ASN1Primitive primitive)
++            throws Exception {
++        PrivateKeyInfo info = PrivateKeyInfo.getInstance(primitive);
++        return KeyFactory.getInstance(algorithm).generatePrivate(
++                new PKCS8EncodedKeySpec(info.getEncoded()));
++    }
++
++    private static PrivateKey parseEcPrivateKey(byte[] keyBytes,
++            boolean allowPkcs8Fallback) throws Exception {
++        ASN1Primitive primitive = readSingleAsn1(keyBytes);
++        ECPrivateKey key;
++        try {
++            key = ECPrivateKey.getInstance(primitive);
++            key.getKey();
++        } catch (Exception e) {
++            if (!allowPkcs8Fallback) throw e;
++            return pkcs8PrivateKey("EC", primitive);
++        }
++        // SEC1 keys must name their curve; explicit curve parameters are not accepted.
++        ASN1ObjectIdentifier curve;
++        try {
++            curve = ASN1ObjectIdentifier.getInstance(key.getParameters());
++        } catch (RuntimeException e) {
++            curve = null; // getParameters() throws when the optional field is absent
++        }
++        if (curve == null) throw new GeneralSecurityException("EC key without named curve");
++        PrivateKeyInfo info = new PrivateKeyInfo(
++                new AlgorithmIdentifier(X9ObjectIdentifiers.id_ecPublicKey, curve), key);
++        return KeyFactory.getInstance("EC").generatePrivate(
++                new PKCS8EncodedKeySpec(info.getEncoded()));
++    }
++
++    private static PrivateKey parseRsaPrivateKey(byte[] keyBytes,
++            boolean allowPkcs8Fallback) throws Exception {
++        ASN1Primitive primitive = readSingleAsn1(keyBytes);
++        RSAPrivateKey key;
++        try {
++            key = RSAPrivateKey.getInstance(primitive);
++        } catch (Exception e) {
++            if (!allowPkcs8Fallback) throw e;
++            return pkcs8PrivateKey("RSA", primitive);
++        }
++        return KeyFactory.getInstance("RSA").generatePrivate(new RSAPrivateCrtKeySpec(
++                key.getModulus(), key.getPublicExponent(), key.getPrivateExponent(),
++                key.getPrime1(), key.getPrime2(), key.getExponent1(), key.getExponent2(),
++                key.getCoefficient()));
++    }
++
++    private static ASN1Primitive readSingleAsn1(byte[] der) throws IOException {
++        try (ASN1InputStream input = new ASN1InputStream(der)) {
++            ASN1Primitive result = input.readObject();
++            if (result == null || input.readObject() != null) {
++                throw new IOException("Expected exactly one DER object");
++            }
++            return result;
++        }
++    }
++
++    private static String normalizeAlgorithm(String algorithm) {
++        if (algorithm == null) throw new IllegalArgumentException("Missing key algorithm");
++        return switch (algorithm.toLowerCase(Locale.ROOT)) {
++            case "ec", "ecdsa" -> "EC";
++            case "rsa" -> "RSA";
++            default -> throw new IllegalArgumentException("Unsupported key algorithm");
++        };
++    }
++
++    private static String signatureAlgorithm(String algorithm) {
++        if ("EC".equalsIgnoreCase(algorithm)) return "SHA256withECDSA";
++        if ("RSA".equalsIgnoreCase(algorithm)) return "SHA256withRSA";
++        throw new IllegalArgumentException("Unsupported signature algorithm");
++    }
++
++    private static final class PemData {
++        final String type;
++        final byte[] bytes;
++
++        PemData(String type, byte[] bytes) {
++            this.type = type;
++            this.bytes = bytes;
++        }
++    }
++
++    private static PemData parsePemContent(String pem) {
++        String value = pem.trim();
++        String type = null;
++        String body = value;
++        if (value.startsWith("-----BEGIN ")) {
++            int typeEnd = value.indexOf("-----", 11);
++            require(typeEnd > 11);
++            type = value.substring(11, typeEnd);
++            require(type.matches("[A-Z0-9 ]+"));
++            String begin = "-----BEGIN " + type + "-----";
++            String end = "-----END " + type + "-----";
++            require(value.startsWith(begin) && value.endsWith(end));
++            body = value.substring(begin.length(), value.length() - end.length()).trim();
++            require(!body.contains("-----"));
++        } else {
++            require(!value.contains("-----"));
++        }
++        String base64 = body.replaceAll("\\s", "");
++        require(!base64.isEmpty() && BASE64.matcher(base64).matches());
++        return new PemData(type, Base64.getDecoder().decode(base64));
++    }
++
++    /** Encodes a certificate chain as concatenated DER certificates. */
++    public static byte[] encodeChain(Certificate[] chain) throws CertificateException {
++        if (chain == null) return null;
++        try {
++            ByteArrayOutputStream output = new ByteArrayOutputStream();
++            for (Certificate certificate : chain) {
++                output.write(certificate.getEncoded());
++            }
++            return output.toByteArray();
++        } catch (IOException e) {
++            throw new CertificateException("Unable to encode certificate chain", e);
++        }
++    }
++
++    /** Decodes concatenated DER certificates. */
++    public static Certificate[] decodeChain(byte[] encoded) throws CertificateException {
++        if (encoded == null) return null;
++        CertificateFactory factory = CertificateFactory.getInstance("X.509");
++        return factory.generateCertificates(new ByteArrayInputStream(encoded)).toArray(
++                new Certificate[0]);
++    }
++
++    private static final class JcaContentSigner implements ContentSigner {
++        private final AlgorithmIdentifier algorithmIdentifier;
++        private final Signature signature;
++        private final ByteArrayOutputStream output = new ByteArrayOutputStream();
++
++        JcaContentSigner(String algorithm, PrivateKey privateKey) throws GeneralSecurityException {
++            algorithmIdentifier = new DefaultSignatureAlgorithmIdentifierFinder().find(algorithm);
++            signature = Signature.getInstance(algorithm);
++            signature.initSign(privateKey);
++        }
++
++        @Override
++        public AlgorithmIdentifier getAlgorithmIdentifier() {
++            return algorithmIdentifier;
++        }
++
++        @Override
++        public OutputStream getOutputStream() {
++            return output;
++        }
++
++        @Override
++        public byte[] getSignature() {
++            try {
++                byte[] data = output.toByteArray();
++                signature.update(data);
++                return signature.sign();
++            } catch (GeneralSecurityException e) {
++                throw new RuntimeException("Unable to sign certificate", e);
++            }
++        }
++    }
++}
+diff --git a/core/java/com/android/internal/gmscompat/PlayKeyboxHooks.java b/core/java/com/android/internal/gmscompat/PlayKeyboxHooks.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..3f600988901203b48d244b6c8d4001e40da7cb14
+--- /dev/null
++++ b/core/java/com/android/internal/gmscompat/PlayKeyboxHooks.java
+@@ -0,0 +1,63 @@
++/*
++ * Copyright (C) 2026 The Graphite Project
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++package com.android.internal.gmscompat;
++
++import android.app.compat.gms.GmsCompat;
++import android.util.Log;
++
++import java.security.cert.Certificate;
++import java.security.cert.X509Certificate;
++import java.util.Arrays;
++
++/** Client side of the Play-services-only keybox hook. */
++public final class PlayKeyboxHooks {
++    private static final String TAG = "GmsCompat/Keybox";
++
++    private PlayKeyboxHooks() {}
++
++    public static boolean shouldHook() {
++        // PackageId.GMS_CORE is assigned by PackageManager only after Google's signing certificate
++        // is verified. The combined checks exclude privileged GMS and GmsCompat test packages.
++        return GmsCompat.isEnabled() && GmsCompat.isGmsCore();
++    }
++
++    public static Certificate[] maybeRewrite(Certificate[] chain) {
++        if (!shouldHook() || chain == null || chain.length < 2
++                || !(chain[0] instanceof X509Certificate)) {
++            return chain;
++        }
++        X509Certificate leaf = (X509Certificate) chain[0];
++        if (leaf.getExtensionValue(PlayKeybox.ATTESTATION_EXTENSION_OID) == null) {
++            return chain;
++        }
++
++        try {
++            byte[] request = PlayKeybox.encodeChain(chain);
++            byte[] response = GmsCompatApp.call(i -> i.rewriteAttestationChain(request));
++            if (response == null) return chain;
++            Certificate[] replacement = PlayKeybox.decodeChain(response);
++            if (replacement == null || replacement.length < 2
++                    || !(replacement[0] instanceof X509Certificate)) {
++                return chain;
++            }
++            X509Certificate replacementLeaf = (X509Certificate) replacement[0];
++            // Never allow the helper to change which application key is attested or which
++            // KeyMint authorization list is being signed.
++            if (!Arrays.equals(leaf.getPublicKey().getEncoded(),
++                    replacementLeaf.getPublicKey().getEncoded())
++                    || !Arrays.equals(leaf.getExtensionValue(PlayKeybox.ATTESTATION_EXTENSION_OID),
++                    replacementLeaf.getExtensionValue(PlayKeybox.ATTESTATION_EXTENSION_OID))) {
++                Log.w(TAG, "Rejected a chain that changed the application key or attestation");
++                return chain;
++            }
++            return replacement;
++        } catch (Exception e) {
++            // Keybox data and certificates are deliberately not logged.
++            Log.w(TAG, "Chain rewrite failed: " + e.getClass().getSimpleName());
++            return chain;
++        }
++    }
++}
+diff --git a/core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java b/core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..bc40baef183096ca4270e09fe2e2ce80ad7c2644
+--- /dev/null
++++ b/core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java
+@@ -0,0 +1,255 @@
++/*
++ * Copyright (C) 2026 The Graphite Project
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++package com.android.internal.gmscompat;
++
++import static org.junit.Assert.assertArrayEquals;
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertNull;
++import static org.junit.Assert.fail;
++
++import androidx.test.ext.junit.runners.AndroidJUnit4;
++import androidx.test.filters.SmallTest;
++
++import org.bouncycastle.asn1.ASN1ObjectIdentifier;
++import org.bouncycastle.asn1.DEROctetString;
++import org.bouncycastle.asn1.x500.X500Name;
++import org.bouncycastle.asn1.x509.Extension;
++import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo;
++import org.bouncycastle.cert.X509CertificateHolder;
++import org.bouncycastle.cert.X509v3CertificateBuilder;
++import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
++
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++import java.io.ByteArrayInputStream;
++import java.math.BigInteger;
++import java.security.KeyPair;
++import java.security.KeyPairGenerator;
++import java.security.PrivateKey;
++import java.security.PublicKey;
++import java.security.cert.Certificate;
++import java.security.cert.CertificateFactory;
++import java.security.cert.X509Certificate;
++import java.time.Instant;
++import java.time.temporal.ChronoUnit;
++import java.util.Arrays;
++import java.util.Base64;
++import java.util.Date;
++
++@SmallTest
++@RunWith(AndroidJUnit4.class)
++public class PlayKeyboxTest {
++    private static long serial = 1;
++
++    @Test
++    public void ecKeyboxReSignsOnlyAttestedLeaf() throws Exception {
++        checkKeybox("EC");
++    }
++
++    @Test
++    public void rsaKeyboxReSignsOnlyAttestedLeaf() throws Exception {
++        checkKeybox("RSA");
++    }
++
++    @Test
++    public void mismatchedPrivateKeyIsRejected() throws Exception {
++        KeyboxMaterial keybox = createKeybox("EC");
++        KeyPair other = keyPair("EC");
++        String xml = xml("ecdsa", other.getPrivate().getEncoded(),
++                new X509Certificate[] { keybox.issuer, keybox.root });
++        try {
++            PlayKeybox.parse(xml.getBytes());
++            fail("Expected key mismatch to be rejected");
++        } catch (Exception expected) {
++            // Expected.
++        }
++    }
++
++    @Test
++    public void malformedInputsAreRejected() throws Exception {
++        KeyboxMaterial keybox = createKeybox("EC");
++        byte[] privateKey = keybox.issuerKey.getPrivate().getEncoded();
++        String valid = xml("ecdsa", privateKey,
++                new X509Certificate[] { keybox.issuer, keybox.root });
++
++        expectRejected(valid.replace("<AndroidAttestation>", "<OtherRoot>")
++                .replace("</AndroidAttestation>", "</OtherRoot>"));
++        expectRejected(xml("ecdsa", Arrays.copyOf(privateKey, privateKey.length + 1),
++                new X509Certificate[] { keybox.issuer, keybox.root }));
++        expectRejected(xml("ecdsa", privateKey, new X509Certificate[] { keybox.issuer }));
++
++        int start = valid.indexOf("<PrivateKey>") + "<PrivateKey>".length();
++        int end = valid.indexOf("</PrivateKey>");
++        expectRejected(valid.substring(0, start) + "not*base64" + valid.substring(end));
++    }
++
++    @Test
++    public void commonKeyboxFileFormatIsAccepted() throws Exception {
++        // Layout of keybox files as distributed: counts, DeviceID, PEM blocks with format="pem",
++        // SEC1 and PKCS#1 private keys, an EC and an RSA key in one keybox.
++        KeyboxMaterial ec = createKeybox("EC");
++        KeyboxMaterial rsa = createKeybox("RSA");
++        String xml = "<?xml version=\"1.0\"?>\n<AndroidAttestation>\n"
++                + "<NumberOfKeyboxes>1</NumberOfKeyboxes>\n"
++                + "<Keybox DeviceID=\"test\">\n"
++                + key("ecdsa", pem("EC PRIVATE KEY", innerKey(ec.issuerKey)), ec)
++                + key("rsa", pem("RSA PRIVATE KEY", innerKey(rsa.issuerKey)), rsa)
++                + "</Keybox>\n</AndroidAttestation>\n";
++        PlayKeybox.ParsedKeybox parsed = PlayKeybox.parse(xml.getBytes());
++        assertEquals("EC, RSA", parsed.getAlgorithms());
++
++        expectRejected(xml.replace("format=\"pem\"", "format=\"der\""));
++        expectRejected(xml.replace("DeviceID=", "Other="));
++    }
++
++    private static String key(String algorithm, String privateKeyPem, KeyboxMaterial material)
++            throws Exception {
++        return "<Key algorithm=\"" + algorithm + "\">\n"
++                + "<PrivateKey format=\"pem\">\n" + privateKeyPem + "</PrivateKey>\n"
++                + "<CertificateChain>\n<NumberOfCertificates>2</NumberOfCertificates>\n"
++                + "<Certificate format=\"pem\">\n"
++                + pem("CERTIFICATE", material.issuer.getEncoded()) + "</Certificate>\n"
++                + "<Certificate format=\"pem\">\n"
++                + pem("CERTIFICATE", material.root.getEncoded()) + "</Certificate>\n"
++                + "</CertificateChain>\n</Key>\n";
++    }
++
++    /** SEC1 (with its named curve, as OpenSSL writes it) or PKCS#1 encoding of a key. */
++    private static byte[] innerKey(KeyPair keyPair) throws Exception {
++        org.bouncycastle.asn1.pkcs.PrivateKeyInfo info = org.bouncycastle.asn1.pkcs.PrivateKeyInfo
++                .getInstance(keyPair.getPrivate().getEncoded());
++        if (!"EC".equals(keyPair.getPrivate().getAlgorithm())) {
++            return info.parsePrivateKey().toASN1Primitive().getEncoded();
++        }
++        BigInteger s = org.bouncycastle.asn1.sec.ECPrivateKey
++                .getInstance(info.parsePrivateKey()).getKey();
++        return new org.bouncycastle.asn1.sec.ECPrivateKey(256, s,
++                info.getPrivateKeyAlgorithm().getParameters()).getEncoded();
++    }
++
++    private static String pem(String type, byte[] der) {
++        return "-----BEGIN " + type + "-----\n"
++                + Base64.getMimeEncoder(64, new byte[] { '\n' }).encodeToString(der)
++                + "\n-----END " + type + "-----\n";
++    }
++
++    private static void expectRejected(String xml) throws Exception {
++        try {
++            PlayKeybox.parse(xml.getBytes());
++            fail("Expected malformed keybox to be rejected");
++        } catch (Exception expected) {
++            // Expected.
++        }
++    }
++
++    private static void checkKeybox(String algorithm) throws Exception {
++        KeyboxMaterial keybox = createKeybox(algorithm);
++        // Deliberately reverse the chain; the parser must reconstruct issuer -> root order.
++        String xml = xml("EC".equals(algorithm) ? "ecdsa" : "rsa",
++                keybox.issuerKey.getPrivate().getEncoded(),
++                new X509Certificate[] { keybox.root, keybox.issuer });
++        PlayKeybox.ParsedKeybox parsed = PlayKeybox.parse(xml.getBytes());
++
++        KeyPair realIssuerKey = keyPair(algorithm);
++        X509Certificate realIssuer = certificate("Real issuer", "Real issuer",
++                realIssuerKey.getPublic(), realIssuerKey.getPrivate(), realIssuerKey.getPublic(),
++                false);
++        KeyPair applicationKey = keyPair(algorithm);
++        X509Certificate realLeaf = certificate("Real leaf", "Real issuer",
++                applicationKey.getPublic(), realIssuerKey.getPrivate(), realIssuerKey.getPublic(),
++                true);
++        Certificate[] realChain = { realLeaf, realIssuer };
++
++        Certificate[] rewritten = parsed.maybeRewrite(realChain);
++        assertEquals(3, rewritten.length);
++        X509Certificate replacement = (X509Certificate) rewritten[0];
++        assertArrayEquals(applicationKey.getPublic().getEncoded(),
++                replacement.getPublicKey().getEncoded());
++        assertArrayEquals(realLeaf.getExtensionValue(PlayKeybox.ATTESTATION_EXTENSION_OID),
++                replacement.getExtensionValue(PlayKeybox.ATTESTATION_EXTENSION_OID));
++        replacement.verify(keybox.issuerKey.getPublic());
++        assertArrayEquals(keybox.issuer.getEncoded(), rewritten[1].getEncoded());
++        assertArrayEquals(keybox.root.getEncoded(), rewritten[2].getEncoded());
++
++        X509Certificate ordinaryLeaf = certificate("Ordinary leaf", "Real issuer",
++                applicationKey.getPublic(), realIssuerKey.getPrivate(), realIssuerKey.getPublic(),
++                false);
++        assertNull(parsed.maybeRewrite(new Certificate[] { ordinaryLeaf, realIssuer }));
++    }
++
++    private static KeyboxMaterial createKeybox(String algorithm) throws Exception {
++        KeyPair rootKey = keyPair(algorithm);
++        X509Certificate root = certificate("Test root", "Test root", rootKey.getPublic(),
++                rootKey.getPrivate(), rootKey.getPublic(), false);
++        KeyPair issuerKey = keyPair(algorithm);
++        X509Certificate issuer = certificate("Test issuer", "Test root", issuerKey.getPublic(),
++                rootKey.getPrivate(), rootKey.getPublic(), false);
++        return new KeyboxMaterial(root, issuer, issuerKey);
++    }
++
++    private static KeyPair keyPair(String algorithm) throws Exception {
++        KeyPairGenerator generator = KeyPairGenerator.getInstance(algorithm);
++        if ("EC".equals(algorithm)) {
++            generator.initialize(256);
++        } else {
++            generator.initialize(2048);
++        }
++        return generator.generateKeyPair();
++    }
++
++    private static X509Certificate certificate(String subject, String issuer,
++            PublicKey publicKey, PrivateKey signingKey, PublicKey issuerPublicKey,
++            boolean attested) throws Exception {
++        Instant now = Instant.now();
++        X509v3CertificateBuilder builder = new X509v3CertificateBuilder(
++                new X500Name("CN=" + issuer), BigInteger.valueOf(serial++),
++                Date.from(now.minus(1, ChronoUnit.HOURS)),
++                Date.from(now.plus(1, ChronoUnit.DAYS)), new X500Name("CN=" + subject),
++                SubjectPublicKeyInfo.getInstance(publicKey.getEncoded()));
++        if (attested) {
++            builder.addExtension(new Extension(
++                    new ASN1ObjectIdentifier(PlayKeybox.ATTESTATION_EXTENSION_OID), false,
++                    new DEROctetString(new byte[] { 1, 2, 3, 4 })));
++        }
++        String signatureAlgorithm = "EC".equals(signingKey.getAlgorithm())
++                ? "SHA256withECDSA" : "SHA256withRSA";
++        // The platform's default provider (Conscrypt) signs both EC and RSA.
++        JcaContentSignerBuilder signerBuilder = new JcaContentSignerBuilder(signatureAlgorithm);
++        X509CertificateHolder holder = builder.build(signerBuilder.build(signingKey));
++        X509Certificate certificate = (X509Certificate) CertificateFactory.getInstance("X.509")
++                .generateCertificate(new ByteArrayInputStream(holder.getEncoded()));
++        certificate.verify(issuerPublicKey);
++        return certificate;
++    }
++
++    private static String xml(String algorithm, byte[] privateKey,
++            X509Certificate[] certificates) throws Exception {
++        StringBuilder xml = new StringBuilder();
++        xml.append("<AndroidAttestation><Keybox><Key algorithm=\"")
++                .append(algorithm).append("\"><PrivateKey>")
++                .append(Base64.getEncoder().encodeToString(privateKey))
++                .append("</PrivateKey><CertificateChain>");
++        for (X509Certificate certificate : certificates) {
++            xml.append("<Certificate>")
++                    .append(Base64.getEncoder().encodeToString(certificate.getEncoded()))
++                    .append("</Certificate>");
++        }
++        return xml.append("</CertificateChain></Key></Keybox></AndroidAttestation>").toString();
++    }
++
++    private static final class KeyboxMaterial {
++        final X509Certificate root;
++        final X509Certificate issuer;
++        final KeyPair issuerKey;
++
++        KeyboxMaterial(X509Certificate root, X509Certificate issuer, KeyPair issuerKey) {
++            this.root = root;
++            this.issuer = issuer;
++            this.issuerKey = issuerKey;
++        }
++    }
++}
+diff --git a/keystore/java/android/security/keystore2/AndroidKeyStoreSpi.java b/keystore/java/android/security/keystore2/AndroidKeyStoreSpi.java
+index 3694e59b034a594df5a18fa730c1a2bb191d7c43..3919f1d0a8d7dc224e999d95d2f1738d430c7ae6 100644
+--- a/keystore/java/android/security/keystore2/AndroidKeyStoreSpi.java
++++ b/keystore/java/android/security/keystore2/AndroidKeyStoreSpi.java
+@@ -48,6 +48,7 @@ import android.system.keystore2.ResponseCode;
+ import android.util.Log;
+ 
+ import com.android.internal.annotations.VisibleForTesting;
++import com.android.internal.gmscompat.PlayKeyboxHooks;
+ 
+ import java.io.ByteArrayInputStream;
+ import java.io.IOException;
+@@ -212,7 +213,7 @@ public class AndroidKeyStoreSpi extends KeyStoreSpi {
+ 
+         caList[0] = leaf;
+ 
+-        return caList;
++        return PlayKeyboxHooks.maybeRewrite(caList);
+     }
+ 
+     @Override
+@@ -223,6 +224,14 @@ public class AndroidKeyStoreSpi extends KeyStoreSpi {
+             return null;
+         }
+ 
++        if (PlayKeyboxHooks.shouldHook() && response.metadata.certificateChain != null) {
++            // Keep single-certificate retrieval consistent with the rewritten chain.
++            Certificate[] chain = engineGetCertificateChain(alias);
++            if (chain != null && chain.length > 0) {
++                return chain[0];
++            }
++        }
++
+         byte[] encodedCert = response.metadata.certificate;
+         if (encodedCert != null) {
+             return toCertificate(encodedCert);

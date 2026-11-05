@@ -46,6 +46,7 @@ every existing toggle has to actually do what it says.
 | 38 | Lawnchair: the Wi-Fi tile was called Internet | Launcher | | Done: confirmed on the phone |
 | 39 | 3D parallax wallpaper with object selection | New app | | Dropped (user decision, 2026-11-04): not their thing. Archived with its ROM integration in the private repo graphite_depth_wallpaper |
 | 40 | Experimental AMOLED mode for the 3D wallpaper | New app | Menu, off by default, warning | Dropped with the wallpaper, in the same archive |
+| 41 | Play services key attestation keybox | GmsCompat, Graphite settings | Per-user, off by default; user-supplied XML only; genuine sandboxed Play services only; no downloads or other-app targeting | Done on the emulator (patch 0650 + Graphite settings entry): parser and re-signing tests pass (EC, RSA, real keybox file layout, malformed input); import, rejection without changes, deletion and deletion on Play services removal checked in the UI. Play itself isn't on the emulator, so the switch and a real attestation chain (Play Integrity) are still to check on the phone |
 
 ## Plan to the release (user, 2026-11-03)
 

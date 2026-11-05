@@ -1,0 +1,59 @@
+title = "Play services key attestation keybox"
+description = """
+RELAXES ATTESTATION AUTHENTICITY (user approval 2026-11-05). Adds an off-by-default, per-user
+keybox for GrapheneOS' sandboxed Google Play services. When the user imports their own keybox and
+explicitly enables it, only the genuine Google Play services app can have its AndroidKeyStore
+attestation certificate chain rewritten with that keybox. No keybox is bundled or downloaded, no
+other app or system component sees a changed chain, and Play receives no permission, privilege or
+sandbox exception. The setting, imported key material and hook are per user/profile. Stock behavior
+is unchanged while Play services is absent, no keybox is configured, the feature is disabled or the
+keybox's certificates are expired / not yet valid.
+
+frameworks/base: AndroidKeyStoreSpi.engineGetCertificateChain() passes the chain to PlayKeyboxHooks
+(engineGetCertificate() follows the rewritten chain). The hook acts only when GmsCompat is enabled
+in this process and its PackageId is GMS_CORE (signature-verified, unprivileged), asks GmsCompatApp
+via IGms2Gca.rewriteAttestationChain, and rejects a reply whose leaf public key or attestation
+extension differ from the original. PlayKeybox: strict parser for the common AndroidAttestation
+keybox XML (EC/RSA, SEC1/PKCS#1/PKCS#8 PEM or raw base64, chain must reach a self-signed root and
+match the private key) and the leaf re-signer. Tests: core/tests/coretests PlayKeyboxTest.
+packages/apps/GmsCompat: KeyboxActivity (SHOW_UI protected) to import / switch / delete,
+KeyboxStore (validated XML as 0600 files in the user's credential-encrypted no_backup dir; a
+rejected import changes nothing), BinderGms2Gca UID check, deletion on PACKAGE_FULLY_REMOVED of
+com.google.android.gms. The Graphite settings entry is in the graphite_parts repo, not this patch.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "Graphite settings has no custom keybox option for sandboxed Play services; hardware key attestation remains stock."
+category = "feature"
+depends = []
+enabled = true
+notes = """
+Design: extends IGms2Gca instead of adding a system service. PlayKeybox parses/validates XML and
+re-signs only leaves containing attestation OID 1.3.6.1.4.1.11129.2.1.17; it preserves the real
+application public key and every attestation field. Software key/chain synthesis, boot-state and
+patch-level spoofing, target lists, downloads and revocation fetching from crDroid are deliberately
+out of scope. GmsCompat stores the validated XML as 0600 files in per-user no-backup storage,
+deletes it when Play services is removed, and performs signing in its own process so private keys
+never cross Binder. GraphiteParts opens GmsCompat's SHOW_UI-protected KeyboxActivity.
+Reference: crDroid Android 17 frameworks commit 21a2fd02bba5 (KeyBoxManager/CertificateHacker) and
+crDroidSettings commit 1235bcb69f57. Caller scoping uses GrapheneOS PackageId.GMS_CORE, which is
+assigned only after signature and unprivileged-app validation, plus a UID check in BinderGms2Gca.
+Porting hints: keys go through the platform KeyFactory/Signature providers (Conscrypt); the
+framework's repackaged BouncyCastle provider has no ECDSA. A receiver for PACKAGE_REMOVED would never
+fire (sent without FLAG_RECEIVER_INCLUDE_BACKGROUND); PACKAGE_FULLY_REMOVED is. Emulator testing of a
+framework change needs `m framework-minus-apex` (installed jar + boot image) and a reboot; `m
+framework` alone leaves the old framework.jar on the device. Test: ./dev.sh adb shell am instrument -w
+-e class com.android.internal.gmscompat.PlayKeyboxTest
+com.android.frameworks.coretests/androidx.test.runner.AndroidJUnitRunner
+"""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0650-play-keybox --project <path> --new
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"
+
+[[change]]
+project = "packages/apps/GmsCompat"
+file = "packages_apps_GmsCompat.patch"
