@@ -18,11 +18,13 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 
 ---
  .../android/internal/gmscompat/IGms2Gca.aidl  |   4 +
- .../internal/gmscompat/PlayKeybox.java        | 775 ++++++++++++++++++
- .../internal/gmscompat/PlayKeyboxHooks.java   |  61 ++
- .../internal/gmscompat/PlayKeyboxTest.java    | 306 +++++++
+ .../internal/gmscompat/IKeyboxSigner.aidl     |   9 +
+ .../internal/gmscompat/PlayKeybox.java        | 835 ++++++++++++++++++
+ .../internal/gmscompat/PlayKeyboxHooks.java   | 219 +++++
+ .../internal/gmscompat/PlayKeyboxTest.java    | 349 ++++++++
  .../keystore2/AndroidKeyStoreSpi.java         |  11 +-
- 5 files changed, 1156 insertions(+), 1 deletion(-)
+ 6 files changed, 1426 insertions(+), 1 deletion(-)
+ create mode 100644 core/java/com/android/internal/gmscompat/IKeyboxSigner.aidl
  create mode 100644 core/java/com/android/internal/gmscompat/PlayKeybox.java
  create mode 100644 core/java/com/android/internal/gmscompat/PlayKeyboxHooks.java
  create mode 100644 core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java
@@ -40,12 +42,27 @@ index a0b5363fd0749cea2cc80a99fe60720c0f53bc1c..0a9ba05b122933c224f792d21ab810ac
 +    // when the feature is off, no valid keybox is configured, or this is not an attestation chain.
 +    @nullable byte[] rewriteAttestationChain(in byte[] chain);
  }
+diff --git a/core/java/com/android/internal/gmscompat/IKeyboxSigner.aidl b/core/java/com/android/internal/gmscompat/IKeyboxSigner.aidl
+new file mode 100644
+index 0000000000000000000000000000000000000000..beb8fcc8fb61c4762972025d034c48467583068e
+--- /dev/null
++++ b/core/java/com/android/internal/gmscompat/IKeyboxSigner.aidl
+@@ -0,0 +1,9 @@
++package com.android.internal.gmscompat;
++
++// Minimal, unprotected interface any app can bind to when "apply to all apps" is on. It only
++// re-signs the caller's own attestation chain with the user's keybox; GmsCompat returns null when
++// the feature or the all-apps option is off. Kept separate from IGms2Gca so arbitrary apps get
++// nothing but this one method.
++interface IKeyboxSigner {
++    @nullable byte[] rewriteAttestationChain(in byte[] chain);
++}
 diff --git a/core/java/com/android/internal/gmscompat/PlayKeybox.java b/core/java/com/android/internal/gmscompat/PlayKeybox.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..8ed05a419f221d4fd126b2e32145b50db9a32e4d
+index 0000000000000000000000000000000000000000..75d7ac79d376069aaa0ae7fd8b9450c771a228b1
 --- /dev/null
 +++ b/core/java/com/android/internal/gmscompat/PlayKeybox.java
-@@ -0,0 +1,775 @@
+@@ -0,0 +1,835 @@
 +/*
 + * Copyright (C) 2026 The Graphite Project
 + *
@@ -74,6 +91,7 @@ index 0000000000000000000000000000000000000000..8ed05a419f221d4fd126b2e32145b50d
 +import com.android.internal.org.bouncycastle.asn1.ASN1OctetString;
 +import com.android.internal.org.bouncycastle.asn1.ASN1Primitive;
 +import com.android.internal.org.bouncycastle.asn1.ASN1Sequence;
++import com.android.internal.org.bouncycastle.asn1.ASN1Set;
 +import com.android.internal.org.bouncycastle.asn1.ASN1TaggedObject;
 +import com.android.internal.org.bouncycastle.asn1.DEROctetString;
 +import com.android.internal.org.bouncycastle.asn1.DERSequence;
@@ -788,6 +806,65 @@ index 0000000000000000000000000000000000000000..8ed05a419f221d4fd126b2e32145b50d
 +                new Certificate[0]);
 +    }
 +
++    // KeyMint AttestationApplicationId tag inside an AuthorizationList.
++    private static final int ATTESTATION_APPLICATION_ID_TAG = 709;
++
++    /**
++     * True if every certificate in the chain is signed by the next one and the last one is exactly
++     * {@code trustedRoot}. Used to accept only chains produced by this device's own KeyMint, so the
++     * signer cannot be used to certify keys or attestation contents made up by the caller.
++     */
++    public static boolean chainsToRoot(Certificate[] chain, X509Certificate trustedRoot) {
++        if (chain == null || chain.length < 2 || trustedRoot == null) {
++            return false;
++        }
++        try {
++            for (int i = 0; i < chain.length - 1; i++) {
++                chain[i].verify(chain[i + 1].getPublicKey());
++            }
++            return Arrays.equals(chain[chain.length - 1].getEncoded(), trustedRoot.getEncoded());
++        } catch (Exception e) {
++            return false;
++        }
++    }
++
++    /**
++     * Package names from the attestation's AttestationApplicationId, which keystore fills in from
++     * the UID that owns the key. Empty if the leaf has none or it can't be parsed.
++     */
++    public static List<String> attestedPackageNames(X509Certificate leaf) {
++        List<String> names = new ArrayList<>();
++        try {
++            byte[] value = leaf.getExtensionValue(ATTESTATION_EXTENSION_OID);
++            if (value == null) {
++                return names;
++            }
++            ASN1Sequence keyDescription = ASN1Sequence.getInstance(
++                    ASN1OctetString.getInstance(value).getOctets());
++            for (ASN1Encodable field : keyDescription) {
++                if (!(field instanceof ASN1Sequence)) {
++                    continue;
++                }
++                for (ASN1Encodable element : (ASN1Sequence) field) {
++                    ASN1TaggedObject tagged = ASN1TaggedObject.getInstance(element);
++                    if (tagged.getTagNo() != ATTESTATION_APPLICATION_ID_TAG) {
++                        continue;
++                    }
++                    ASN1Sequence appId = ASN1Sequence.getInstance(ASN1OctetString
++                            .getInstance(tagged.getBaseObject()).getOctets());
++                    for (ASN1Encodable info : ASN1Set.getInstance(appId.getObjectAt(0))) {
++                        byte[] name = ASN1OctetString.getInstance(
++                                ASN1Sequence.getInstance(info).getObjectAt(0)).getOctets();
++                        names.add(new String(name, StandardCharsets.UTF_8));
++                    }
++                }
++            }
++        } catch (Exception e) {
++            names.clear();
++        }
++        return names;
++    }
++
 +    private static final class JcaContentSigner implements ContentSigner {
 +        private final AlgorithmIdentifier algorithmIdentifier;
 +        private final Signature signature;
@@ -823,10 +900,10 @@ index 0000000000000000000000000000000000000000..8ed05a419f221d4fd126b2e32145b50d
 +}
 diff --git a/core/java/com/android/internal/gmscompat/PlayKeyboxHooks.java b/core/java/com/android/internal/gmscompat/PlayKeyboxHooks.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..02daaeee4317c863e9220400c300786f75765364
+index 0000000000000000000000000000000000000000..95e1c880b63088cd5dba81aec8ef16aa306861eb
 --- /dev/null
 +++ b/core/java/com/android/internal/gmscompat/PlayKeyboxHooks.java
-@@ -0,0 +1,61 @@
+@@ -0,0 +1,219 @@
 +/*
 + * Copyright (C) 2026 The Graphite Project
 + * SPDX-License-Identifier: Apache-2.0
@@ -834,28 +911,75 @@ index 0000000000000000000000000000000000000000..02daaeee4317c863e9220400c300786f
 +
 +package com.android.internal.gmscompat;
 +
++import android.app.ActivityThread;
++import android.app.Application;
 +import android.app.compat.gms.GmsCompat;
++import android.content.ComponentName;
++import android.content.Context;
++import android.content.Intent;
++import android.content.ServiceConnection;
++import android.content.pm.PackageManager;
++import android.ext.PackageId;
++import android.os.Handler;
++import android.os.HandlerThread;
++import android.os.IBinder;
++import android.os.Process;
 +import android.util.Log;
 +
 +import java.security.cert.Certificate;
 +import java.security.cert.X509Certificate;
 +import java.util.Arrays;
++import java.util.concurrent.CountDownLatch;
++import java.util.concurrent.TimeUnit;
 +
-+/** Client side of the Play-services-only keybox hook. */
++/**
++ * Client side of the keybox hook, running in the process whose attestation is being read.
++ * <p>
++ * For the genuine Play services process the re-signing goes through the existing GmsCompat binding.
++ * When the user turns on "apply to all apps", any app's chain is re-signed too, by binding to
++ * GmsCompat's signer service. That switch is the per-user enabled state of the signer component
++ * (off in the manifest, flipped by Graphite settings), so no app-readable setting is needed. The
++ * keybox private key always stays in GmsCompat; only certificate chains cross Binder. A failure
++ * anywhere falls back to the real chain and never kills the calling app.
++ */
 +public final class PlayKeyboxHooks {
 +    private static final String TAG = "GmsCompat/Keybox";
++
++    public static final ComponentName SIGNER_SERVICE = new ComponentName(GmsCompatApp.PKG_NAME,
++            GmsCompatApp.PKG_NAME + ".keybox.KeyboxSignerService");
++
++    private static final long BIND_TIMEOUT_MS = 5_000L;
 +
 +    private PlayKeyboxHooks() {}
 +
 +    public static boolean shouldHook() {
-+        // PackageId.GMS_CORE is assigned by PackageManager only after Google's signing certificate
-+        // is verified. The combined checks exclude privileged GMS and GmsCompat test packages.
-+        return GmsCompat.isEnabled() && GmsCompat.isGmsCore();
++        if (GmsCompat.isEnabled() && GmsCompat.isGmsCore()) {
++            // PackageId.GMS_CORE is assigned only after Google's signing certificate is verified.
++            return true;
++        }
++        return allAppsEnabled();
++    }
++
++    private static boolean allAppsEnabled() {
++        if (!Process.isApplicationUid(Process.myUid())) {
++            return false;
++        }
++        Context ctx = appContext();
++        if (ctx == null || PackageId.GMS_CORE_NAME.equals(ctx.getPackageName())
++                || GmsCompatApp.PKG_NAME.equals(ctx.getPackageName())) {
++            return false;
++        }
++        try {
++            // GmsCompat is forceQueryable, so every app can read this per-user state.
++            return ctx.getPackageManager().getComponentEnabledSetting(SIGNER_SERVICE)
++                    == PackageManager.COMPONENT_ENABLED_STATE_ENABLED;
++        } catch (Throwable t) {
++            return false;
++        }
 +    }
 +
 +    public static Certificate[] maybeRewrite(Certificate[] chain) {
-+        if (!shouldHook() || chain == null || chain.length < 2
-+                || !(chain[0] instanceof X509Certificate)) {
++        if (chain == null || chain.length < 2 || !(chain[0] instanceof X509Certificate)) {
 +            return chain;
 +        }
 +        X509Certificate leaf = (X509Certificate) chain[0];
@@ -863,10 +987,19 @@ index 0000000000000000000000000000000000000000..02daaeee4317c863e9220400c300786f
 +            return chain;
 +        }
 +
++        boolean isGms = GmsCompat.isEnabled() && GmsCompat.isGmsCore();
++        if (!isGms && !allAppsEnabled()) {
++            return chain;
++        }
++
 +        try {
 +            byte[] request = PlayKeybox.encodeChain(chain);
-+            byte[] response = GmsCompatApp.call(i -> i.rewriteAttestationChain(request));
-+            if (response == null) return chain;
++            byte[] response = isGms
++                    ? GmsCompatApp.call(i -> i.rewriteAttestationChain(request))
++                    : AllAppsSigner.rewrite(request);
++            if (response == null) {
++                return chain;
++            }
 +            Certificate[] replacement = PlayKeybox.decodeChain(response);
 +            if (replacement == null || replacement.length < 2
 +                    || !(replacement[0] instanceof X509Certificate)) {
@@ -887,13 +1020,115 @@ index 0000000000000000000000000000000000000000..02daaeee4317c863e9220400c300786f
 +            return chain;
 +        }
 +    }
++
++    private static Context appContext() {
++        Application app = ActivityThread.currentApplication();
++        return app != null ? app.getApplicationContext() : null;
++    }
++
++    /**
++     * Non-fatal, lazily-cached binding from an ordinary app to GmsCompat's signer. Unlike
++     * {@link com.android.internal.gmscompat.util.SynchronousServiceBinding} it must never kill the
++     * host app, so every failure just returns null and the caller keeps the real chain.
++     * Connection callbacks run on a private thread: attestation is often read on the main thread,
++     * which would otherwise deadlock waiting for onServiceConnected.
++     */
++    private static final class AllAppsSigner {
++        private static final Object lock = new Object();
++        private static IKeyboxSigner cached;
++        private static Handler callbackHandler;
++
++        static byte[] rewrite(byte[] chain) {
++            IKeyboxSigner signer = get();
++            if (signer == null) {
++                return null;
++            }
++            try {
++                return signer.rewriteAttestationChain(chain);
++            } catch (Exception e) {
++                synchronized (lock) {
++                    cached = null;
++                }
++                return null;
++            }
++        }
++
++        private static IKeyboxSigner get() {
++            Handler handler;
++            synchronized (lock) {
++                if (cached != null && cached.asBinder().isBinderAlive()) {
++                    return cached;
++                }
++                cached = null;
++                if (callbackHandler == null) {
++                    HandlerThread thread = new HandlerThread("KeyboxSignerBinding");
++                    thread.start();
++                    callbackHandler = thread.getThreadHandler();
++                }
++                handler = callbackHandler;
++            }
++            Context ctx = appContext();
++            if (ctx == null) {
++                return null;
++            }
++
++            Intent intent = new Intent().setComponent(SIGNER_SERVICE);
++            CountDownLatch latch = new CountDownLatch(1);
++            IKeyboxSigner[] result = new IKeyboxSigner[1];
++            ServiceConnection connection = new ServiceConnection() {
++                @Override
++                public void onServiceConnected(ComponentName name, IBinder binder) {
++                    result[0] = IKeyboxSigner.Stub.asInterface(binder);
++                    latch.countDown();
++                }
++
++                @Override
++                public void onServiceDisconnected(ComponentName name) {
++                    synchronized (lock) {
++                        cached = null;
++                    }
++                }
++
++                @Override
++                public void onNullBinding(ComponentName name) {
++                    latch.countDown();
++                }
++            };
++
++            boolean bound = false;
++            try {
++                bound = ctx.bindService(intent, Context.BIND_AUTO_CREATE, handler::post,
++                        connection);
++                if (!bound || !latch.await(BIND_TIMEOUT_MS, TimeUnit.MILLISECONDS)
++                        || result[0] == null) {
++                    if (bound) {
++                        ctx.unbindService(connection);
++                    }
++                    return null;
++                }
++            } catch (Exception e) {
++                if (bound) {
++                    try {
++                        ctx.unbindService(connection);
++                    } catch (Exception ignored) {
++                    }
++                }
++                return null;
++            }
++            // Keep the binding (and the connection) for reuse; it is released with the process.
++            synchronized (lock) {
++                cached = result[0];
++                return cached;
++            }
++        }
++    }
 +}
 diff --git a/core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java b/core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..ed86ca5daa9abc668becc3b1003c8776ffc0dfc3
+index 0000000000000000000000000000000000000000..111c84bd6d193f7b6fd57ad7b11f90d7911b92f6
 --- /dev/null
 +++ b/core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java
-@@ -0,0 +1,306 @@
+@@ -0,0 +1,349 @@
 +/*
 + * Copyright (C) 2026 The Graphite Project
 + * SPDX-License-Identifier: Apache-2.0
@@ -903,7 +1138,9 @@ index 0000000000000000000000000000000000000000..ed86ca5daa9abc668becc3b1003c8776
 +
 +import static org.junit.Assert.assertArrayEquals;
 +import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
 +import static org.junit.Assert.assertNull;
++import static org.junit.Assert.assertTrue;
 +import static org.junit.Assert.fail;
 +
 +import androidx.test.ext.junit.runners.AndroidJUnit4;
@@ -920,6 +1157,7 @@ index 0000000000000000000000000000000000000000..ed86ca5daa9abc668becc3b1003c8776
 +import org.bouncycastle.asn1.ASN1TaggedObject;
 +import org.bouncycastle.asn1.DEROctetString;
 +import org.bouncycastle.asn1.DERSequence;
++import org.bouncycastle.asn1.DERSet;
 +import org.bouncycastle.asn1.DERTaggedObject;
 +import org.bouncycastle.asn1.x500.X500Name;
 +import org.bouncycastle.asn1.x509.Extension;
@@ -945,11 +1183,13 @@ index 0000000000000000000000000000000000000000..ed86ca5daa9abc668becc3b1003c8776
 +import java.util.Arrays;
 +import java.util.Base64;
 +import java.util.Date;
++import java.util.List;
 +
 +@SmallTest
 +@RunWith(AndroidJUnit4.class)
 +public class PlayKeyboxTest {
 +    private static long serial = 1;
++    private static final String ATTESTED_PACKAGE = "com.example.attested";
 +
 +    @Test
 +    public void ecKeyboxReSignsOnlyAttestedLeaf() throws Exception {
@@ -959,6 +1199,33 @@ index 0000000000000000000000000000000000000000..ed86ca5daa9abc668becc3b1003c8776
 +    @Test
 +    public void rsaKeyboxReSignsOnlyAttestedLeaf() throws Exception {
 +        checkKeybox("RSA");
++    }
++
++    @Test
++    public void signerChecksOnlyAcceptDeviceChainsOfTheCaller() throws Exception {
++        KeyPair rootKey = keyPair("EC");
++        X509Certificate root = certificate("Device root", "Device root", rootKey.getPublic(),
++                rootKey.getPrivate(), rootKey.getPublic(), false);
++        KeyPair leafKey = keyPair("EC");
++        X509Certificate leaf = certificate("Leaf", "Device root", leafKey.getPublic(),
++                rootKey.getPrivate(), rootKey.getPublic(), true);
++        assertTrue(PlayKeybox.chainsToRoot(new Certificate[] { leaf, root }, root));
++        assertEquals(List.of(ATTESTED_PACKAGE), PlayKeybox.attestedPackageNames(leaf));
++
++        // A chain the caller made up under its own root is not this device's attestation.
++        KeyPair otherRootKey = keyPair("EC");
++        X509Certificate otherRoot = certificate("Device root", "Device root",
++                otherRootKey.getPublic(), otherRootKey.getPrivate(), otherRootKey.getPublic(),
++                false);
++        X509Certificate forged = certificate("Leaf", "Device root", leafKey.getPublic(),
++                otherRootKey.getPrivate(), otherRootKey.getPublic(), true);
++        assertFalse(PlayKeybox.chainsToRoot(new Certificate[] { forged, otherRoot }, root));
++        // Nor is a forged leaf placed in front of the genuine root.
++        assertFalse(PlayKeybox.chainsToRoot(new Certificate[] { forged, root }, root));
++
++        X509Certificate unattested = certificate("Plain", "Device root", leafKey.getPublic(),
++                rootKey.getPrivate(), rootKey.getPublic(), false);
++        assertTrue(PlayKeybox.attestedPackageNames(unattested).isEmpty());
 +    }
 +
 +    @Test
@@ -1047,6 +1314,16 @@ index 0000000000000000000000000000000000000000..ed86ca5daa9abc668becc3b1003c8776
 +        rot.add(new DEROctetString(new byte[32]));           // verifiedBootHash
 +        ASN1EncodableVector tee = new ASN1EncodableVector();
 +        tee.add(new DERTaggedObject(704, new DERSequence(rot)));
++        // attestationApplicationId: { SET { { packageName, version } }, SET { signatureDigest } }
++        ASN1EncodableVector packageInfo = new ASN1EncodableVector();
++        packageInfo.add(new DEROctetString(ATTESTED_PACKAGE.getBytes()));
++        packageInfo.add(new ASN1Integer(1));
++        ASN1EncodableVector applicationId = new ASN1EncodableVector();
++        applicationId.add(new DERSet(new DERSequence(packageInfo)));
++        applicationId.add(new DERSet(new DEROctetString(new byte[32])));
++        ASN1EncodableVector software = new ASN1EncodableVector();
++        software.add(new DERTaggedObject(709,
++                new DEROctetString(new DERSequence(applicationId).getEncoded())));
 +        ASN1EncodableVector keyDescription = new ASN1EncodableVector();
 +        keyDescription.add(new ASN1Integer(200));            // attestationVersion
 +        keyDescription.add(new ASN1Enumerated(1));           // attestationSecurityLevel
@@ -1054,7 +1331,7 @@ index 0000000000000000000000000000000000000000..ed86ca5daa9abc668becc3b1003c8776
 +        keyDescription.add(new ASN1Enumerated(1));           // keymasterSecurityLevel
 +        keyDescription.add(new DEROctetString("challenge".getBytes()));
 +        keyDescription.add(new DEROctetString(new byte[0])); // uniqueId
-+        keyDescription.add(new DERSequence());               // softwareEnforced
++        keyDescription.add(new DERSequence(software));       // softwareEnforced
 +        keyDescription.add(new DERSequence(tee));            // teeEnforced
 +        return new DERSequence(keyDescription).getEncoded();
 +    }
@@ -1121,6 +1398,7 @@ index 0000000000000000000000000000000000000000..ed86ca5daa9abc668becc3b1003c8776
 +        boolean[] spoofed = rootOfTrust(replacement);
 +        assertEquals("deviceLocked", true, spoofed[0]);
 +        assertEquals("verifiedBootState Verified", true, spoofed[1]);
++        assertEquals(List.of(ATTESTED_PACKAGE), PlayKeybox.attestedPackageNames(replacement));
 +
 +        X509Certificate ordinaryLeaf = certificate("Ordinary leaf", "Real issuer",
 +                applicationKey.getPublic(), realIssuerKey.getPrivate(), realIssuerKey.getPublic(),

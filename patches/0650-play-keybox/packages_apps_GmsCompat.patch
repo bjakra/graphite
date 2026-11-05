@@ -13,22 +13,24 @@ upgraded installs aside). Nothing is bundled, downloaded or logged.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 
 ---
- AndroidManifest.xml                           |  16 ++
+ AndroidManifest.xml                           |  24 +++
  res/values/strings.xml                        |  16 ++
  src/app/grapheneos/gmscompat/BinderGms2Gca.kt |  23 +++
  .../gmscompat/keybox/KeyboxActivity.kt        | 137 +++++++++++++++++
  .../gmscompat/keybox/KeyboxPackageReceiver.kt |  21 +++
- .../gmscompat/keybox/KeyboxStore.kt           | 140 ++++++++++++++++++
- 6 files changed, 353 insertions(+)
+ .../gmscompat/keybox/KeyboxSignerService.kt   |  87 +++++++++++
+ .../gmscompat/keybox/KeyboxStore.kt           | 143 ++++++++++++++++++
+ 7 files changed, 451 insertions(+)
  create mode 100644 src/app/grapheneos/gmscompat/keybox/KeyboxActivity.kt
  create mode 100644 src/app/grapheneos/gmscompat/keybox/KeyboxPackageReceiver.kt
+ create mode 100644 src/app/grapheneos/gmscompat/keybox/KeyboxSignerService.kt
  create mode 100644 src/app/grapheneos/gmscompat/keybox/KeyboxStore.kt
 
 diff --git a/AndroidManifest.xml b/AndroidManifest.xml
-index 7649a9d2a084a2aa87c490e94c14c268dff4129a..26e06315c19580fb4d5124e5d16154291ede7f4f 100644
+index 7649a9d2a084a2aa87c490e94c14c268dff4129a..1d1e2aab18f42669ce7d696a4bde6ca7abe45a17 100644
 --- a/AndroidManifest.xml
 +++ b/AndroidManifest.xml
-@@ -106,5 +106,21 @@
+@@ -106,5 +106,29 @@
              android:name=".location.StubResolutionActivity"
              android:exported="true" />
  
@@ -38,6 +40,14 @@ index 7649a9d2a084a2aa87c490e94c14c268dff4129a..26e06315c19580fb4d5124e5d1615429
 +            android:permission="app.grapheneos.gmscompat.SHOW_UI"
 +            android:theme="@style/Theme.GmsCompat.Settings.FilterTouches"
 +            android:label="@string/keybox_title" />
++
++        <!-- Intentionally unprotected, and disabled until the user turns on "apply to all apps"
++             (Graphite settings enables it per user). It only re-signs the calling app's own
++             device-attested chain. -->
++        <service
++            android:name=".keybox.KeyboxSignerService"
++            android:enabled="false"
++            android:exported="true" />
 +
 +        <receiver
 +            android:name=".keybox.KeyboxPackageReceiver"
@@ -51,7 +61,7 @@ index 7649a9d2a084a2aa87c490e94c14c268dff4129a..26e06315c19580fb4d5124e5d1615429
      </application>
  </manifest>
 diff --git a/res/values/strings.xml b/res/values/strings.xml
-index 29adbe377fd4b9c39be000e0b615fe76d3831e89..a2099fa033661408b7ffc98ff0a95f212c28f674 100644
+index 29adbe377fd4b9c39be000e0b615fe76d3831e89..5a6e028db6cafbf3c3e734768daee70fa9387eb9 100644
 --- a/res/values/strings.xml
 +++ b/res/values/strings.xml
 @@ -229,4 +229,20 @@ Some carriers require an entitlement check (GSMA TS.43 with EAP-AKA authenticati
@@ -73,7 +83,7 @@ index 29adbe377fd4b9c39be000e0b615fe76d3831e89..a2099fa033661408b7ffc98ff0a95f21
 +    <string name="keybox_clear_summary">Turn it off and delete the keybox from this profile</string>
 +    <string name="keybox_clear_confirm">Remove the keybox from this profile?</string>
 +    <string name="keybox_clear_button">Remove</string>
-+    <string name="keybox_explanation">When this is on, Google Play services gets key attestations signed with your keybox instead of with this phone\'s own key. Nothing else changes for Play services, and other apps and profiles aren\'t affected.\n\nGoogle can still reject a keybox, so this doesn\'t guarantee that Play Integrity passes.\n\nThe keybox stays in this profile on this phone. It isn\'t backed up, and it\'s deleted when Google Play services is uninstalled.</string>
++    <string name="keybox_explanation">When this is on, Google Play services gets key attestations signed with your keybox instead of with this phone\'s own key, and they report a locked bootloader. By default only Google Play services is affected; you can extend this to other apps in Graphite settings.\n\nGoogle can still reject a keybox, so this doesn\'t guarantee that Play Integrity passes.\n\nThe keybox stays in this profile on this phone. It isn\'t backed up, and it\'s deleted when Google Play services is uninstalled.</string>
  </resources>
 diff --git a/src/app/grapheneos/gmscompat/BinderGms2Gca.kt b/src/app/grapheneos/gmscompat/BinderGms2Gca.kt
 index be60a9cddb354bc73163524911cdab37bfd41c8d..6825f7156516cee09fbd0a964ab6692e2b1248c4 100644
@@ -291,12 +301,105 @@ index 0000000000000000000000000000000000000000..acd6b4141c6d7d892a4463ada45a9f0f
 +        KeyboxStore.clear()
 +    }
 +}
+diff --git a/src/app/grapheneos/gmscompat/keybox/KeyboxSignerService.kt b/src/app/grapheneos/gmscompat/keybox/KeyboxSignerService.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..6601643868445177833c855fcba3016c7f773710
+--- /dev/null
++++ b/src/app/grapheneos/gmscompat/keybox/KeyboxSignerService.kt
+@@ -0,0 +1,87 @@
++package app.grapheneos.gmscompat.keybox
++
++import android.app.Service
++import android.content.Intent
++import android.os.Binder
++import android.os.IBinder
++import android.security.keystore.KeyGenParameterSpec
++import android.security.keystore.KeyProperties
++import android.util.Log
++import com.android.internal.gmscompat.IKeyboxSigner
++import com.android.internal.gmscompat.PlayKeybox
++import java.security.KeyPairGenerator
++import java.security.KeyStore
++import java.security.cert.X509Certificate
++
++/**
++ * Signer for "apply to all apps". Exported without a permission, but disabled in the manifest:
++ * Graphite settings enables it per user when the user turns the option on, so its enabled state is
++ * the switch. The private key stays in this process.
++ *
++ * Because any app can call it, it re-signs only a chain that came out of this device's own KeyMint
++ * (same root as a key generated here) and that attests a key owned by the calling app. Otherwise a
++ * caller could have the keybox certify a key or attestation contents it made up, and carry those
++ * off the device.
++ */
++class KeyboxSignerService : Service() {
++    private val binder = object : IKeyboxSigner.Stub() {
++        override fun rewriteAttestationChain(chain: ByteArray?): ByteArray? {
++            if (chain == null) return null
++            val callingUid = Binder.getCallingUid()
++            return try {
++                if (!isOwnDeviceChain(chain, callingUid)) {
++                    Log.w(TAG, "Rejected a chain not attested by this device for uid $callingUid")
++                    return null
++                }
++                KeyboxStore.rewriteAttestationChain(chain)
++            } catch (e: Exception) {
++                Log.w(TAG, "Unable to check chain: ${e.javaClass.simpleName}")
++                null
++            }
++        }
++    }
++
++    private fun isOwnDeviceChain(encoded: ByteArray, callingUid: Int): Boolean {
++        val chain = PlayKeybox.decodeChain(encoded)
++        if (chain.isEmpty() || chain[0] !is X509Certificate) return false
++        if (!PlayKeybox.chainsToRoot(chain, deviceRoot())) return false
++        val owned = packageManager.getPackagesForUid(callingUid)?.toSet() ?: return false
++        val attested = PlayKeybox.attestedPackageNames(chain[0] as X509Certificate)
++        return attested.isNotEmpty() && attested.all { it in owned }
++    }
++
++    override fun onBind(intent: Intent?): IBinder = binder
++
++    companion object {
++        private const val TAG = "PlayKeyboxSigner"
++        private const val PROBE_ALIAS = "graphite_keybox_root_probe"
++
++        @Volatile
++        private var cachedRoot: X509Certificate? = null
++
++        /** Root of an attestation chain produced by this device's KeyMint, generated once. */
++        private fun deviceRoot(): X509Certificate? {
++            cachedRoot?.let { return it }
++            synchronized(this) {
++                cachedRoot?.let { return it }
++                val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
++                try {
++                    KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore")
++                        .apply {
++                            initialize(KeyGenParameterSpec.Builder(PROBE_ALIAS,
++                                    KeyProperties.PURPOSE_SIGN)
++                                .setDigests(KeyProperties.DIGEST_SHA256)
++                                .setAttestationChallenge(ByteArray(16))
++                                .build())
++                        }.generateKeyPair()
++                    val chain = keyStore.getCertificateChain(PROBE_ALIAS) ?: return null
++                    val root = chain.last() as? X509Certificate ?: return null
++                    cachedRoot = root
++                    return root
++                } finally {
++                    runCatching { keyStore.deleteEntry(PROBE_ALIAS) }
++                }
++            }
++        }
++    }
++}
 diff --git a/src/app/grapheneos/gmscompat/keybox/KeyboxStore.kt b/src/app/grapheneos/gmscompat/keybox/KeyboxStore.kt
 new file mode 100644
-index 0000000000000000000000000000000000000000..820ef6845631e636e0cf32261237b54d8321fc1e
+index 0000000000000000000000000000000000000000..34b7c634c2375a3fb64c80971e7e312204772c7b
 --- /dev/null
 +++ b/src/app/grapheneos/gmscompat/keybox/KeyboxStore.kt
-@@ -0,0 +1,140 @@
+@@ -0,0 +1,143 @@
 +package app.grapheneos.gmscompat.keybox
 +
 +import android.content.Context
@@ -406,7 +509,10 @@ index 0000000000000000000000000000000000000000..820ef6845631e636e0cf32261237b54d
 +        AtomicFile(enabledFile()).delete()
 +    }
 +
-+    /** Called only by BinderGms2Gca after it has authenticated the Play services caller. */
++    /**
++     * Called by BinderGms2Gca after it has authenticated the Play services caller, and by
++     * KeyboxSignerService after it has checked the chain is the calling app's own device attestation.
++     */
 +    fun rewriteAttestationChain(encodedChain: ByteArray): ByteArray? = synchronized(lock) {
 +        if (!isUserUnlocked()) return null
 +        ensureLoadedLocked()

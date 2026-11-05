@@ -2,43 +2,58 @@ title = "Play services key attestation keybox"
 description = """
 RELAXES ATTESTATION AUTHENTICITY (user approval 2026-11-05). Adds an off-by-default, per-user
 keybox for GrapheneOS' sandboxed Google Play services. When the user imports their own keybox and
-explicitly enables it, only the genuine Google Play services app has its AndroidKeyStore attestation
+explicitly enables it, the genuine Google Play services app has its AndroidKeyStore attestation
 certificate chain re-signed with that keybox, and the RootOfTrust inside that attestation is
 rewritten to report deviceLocked = true and verifiedBootState = Verified (this is what lets Play
 Integrity pass; the device's actual verified boot is not changed, only what Play's attestation
-reports). The attested key stays the caller's own key. No keybox is bundled or downloaded, no other
-app or system component sees a changed chain, and Play receives no permission, privilege or sandbox
-exception. The setting, imported key material and hook are per user/profile. Stock behavior is
-unchanged while Play services is absent, no keybox is configured, the feature is disabled or the
-keybox's certificates are expired / not yet valid.
+reports). The attested key stays the caller's own key. An additional, separately off-by-default
+"apply to all apps" switch (user approval 2026-11-05) extends the same re-signing to any app that
+reads its own key attestation, not just Play. No keybox is bundled or downloaded, and Play (or any
+covered app) receives no permission, privilege or sandbox exception. The settings, imported key
+material and hook are per user/profile. Stock behavior is unchanged while no keybox is configured,
+the feature is disabled or the keybox's certificates are expired / not yet valid.
 
 frameworks/base: AndroidKeyStoreSpi.engineGetCertificateChain() passes the chain to PlayKeyboxHooks
-(engineGetCertificate() follows the rewritten chain). The hook acts only when GmsCompat is enabled
-in this process and its PackageId is GMS_CORE (signature-verified, unprivileged), asks GmsCompatApp
-via IGms2Gca.rewriteAttestationChain, and rejects a reply whose attested (leaf) public key differs
-from the original. PlayKeybox: strict parser for the common AndroidAttestation keybox XML (EC/RSA,
-SEC1/PKCS#1/PKCS#8 PEM or raw base64, chain must reach a self-signed root and match the private key),
-the leaf re-signer and the RootOfTrust rewrite (lockBootState). Tests: core/tests/coretests
-PlayKeyboxTest, including an assertion that the re-signed leaf reports locked + Verified.
-packages/apps/GmsCompat: KeyboxActivity (SHOW_UI protected) to import / switch / delete,
-KeyboxStore (validated XML as 0600 files in the user's credential-encrypted no_backup dir; a
-rejected import changes nothing), BinderGms2Gca UID check, deletion on PACKAGE_FULLY_REMOVED of
-com.google.android.gms. The Graphite settings entry is in the graphite_parts repo, not this patch.
+(engineGetCertificate() follows the rewritten chain). For Play services (GmsCompat enabled in this
+process, PackageId GMS_CORE: signature-verified, unprivileged) the hook asks GmsCompatApp via
+IGms2Gca.rewriteAttestationChain. When "apply to all apps" is on (the per-user enabled state of
+GmsCompat's KeyboxSignerService, read via PackageManager since GmsCompat is forceQueryable) any other
+app's chain is re-signed too, by binding to that service over the new IKeyboxSigner. The bind runs on
+a private thread and never kills the host app on failure; the keybox private key stays in GmsCompat
+and only certificate chains cross Binder. Either way the hook rejects a reply whose attested (leaf)
+public key differs from the original. PlayKeybox: strict parser for the common AndroidAttestation
+keybox XML (EC/RSA, SEC1/PKCS#1/PKCS#8 PEM or raw base64, chain must reach a self-signed root and
+match the private key), the leaf re-signer, the RootOfTrust rewrite (lockBootState), and helpers
+(chainsToRoot, attestedPackageNames) used to accept only this device's own attestation. Tests:
+core/tests/coretests PlayKeyboxTest (locked + Verified assertion; device-chain/caller-ownership
+checks).
+packages/apps/GmsCompat: KeyboxActivity (SHOW_UI protected) to import / switch / delete, KeyboxStore
+(validated XML as 0600 files in the user's credential-encrypted no_backup dir; a rejected import
+changes nothing), BinderGms2Gca UID check, KeyboxSignerService (exported but manifest-disabled; any
+app may bind only while "apply to all apps" is on, and it re-signs only a chain that came from this
+device's own KeyMint and attests a key owned by the caller), deletion on PACKAGE_FULLY_REMOVED of
+com.google.android.gms. The Graphite settings entry and the "apply to all apps" switch are in the
+graphite_parts repo (KeyboxFragment flips the service's enabled state, CHANGE_COMPONENT_ENABLED_STATE
+privapp-allowlisted), not this patch.
 """
 # false = the ROM still builds and works without it; build.sh may skip it on failure
 required = false
-skip_impact = "Graphite settings has no custom keybox option for sandboxed Play services; hardware key attestation remains stock."
+skip_impact = "Graphite settings has no custom keybox option for sandboxed Play services or other apps; hardware key attestation remains stock."
 category = "feature"
 depends = []
 enabled = true
 notes = """
 Design: extends IGms2Gca instead of adding a system service. PlayKeybox parses/validates XML and
 re-signs only leaves containing attestation OID 1.3.6.1.4.1.11129.2.1.17; it preserves the real
-application public key and every attestation field. Software key/chain synthesis, boot-state and
-patch-level spoofing, target lists, downloads and revocation fetching from crDroid are deliberately
-out of scope. GmsCompat stores the validated XML as 0600 files in per-user no-backup storage,
-deletes it when Play services is removed, and performs signing in its own process so private keys
-never cross Binder. GraphiteParts opens GmsCompat's SHOW_UI-protected KeyboxActivity.
+application public key, rewrites only the RootOfTrust boot state, and keeps every other attestation
+field. The "apply to all apps" path signs in GmsCompat too (one central signer, key never shared with
+app processes, unlike crDroid's in-process key), and only for a chain that chains to this device's
+own KeyMint root and whose AttestationApplicationId names a package of the calling UID. Software
+key/chain synthesis, patch-level spoofing, target lists, downloads and revocation fetching from
+crDroid are deliberately out of scope. GmsCompat stores the validated XML as 0600 files in per-user
+no-backup storage, deletes it when Play services is removed, and performs signing in its own process
+so private keys never cross Binder. GraphiteParts opens GmsCompat's SHOW_UI-protected KeyboxActivity
+and flips KeyboxSignerService's per-user enabled state for the all-apps switch.
 Reference: crDroid Android 17 frameworks commit 21a2fd02bba5 (KeyBoxManager/CertificateHacker) and
 crDroidSettings commit 1235bcb69f57. Caller scoping uses GrapheneOS PackageId.GMS_CORE, which is
 assigned only after signature and unprivileged-app validation, plus a UID check in BinderGms2Gca.
