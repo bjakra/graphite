@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 16:50:51 +0100
+Subject: [PATCH] Play Integrity: let Graphite settings toggle exec-spawning
+ for Play services
+
+Grants org.graphite.parts write access to only the USE_EXEC_SPAWNING /
+USE_EXEC_SPAWNING_NON_DEFAULT GosPackageState flags, same-user, so the "strong
+integrity native hook" switch can disable exec-based spawning for
+com.google.android.gms by itself (gated behind a warning with a countdown in the
+settings app). Far narrower than the Settings app's grant; no other hardening.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+---
+ .../com/android/server/pm/GosPackageStatePermissions.java | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/services/core/java/com/android/server/pm/GosPackageStatePermissions.java b/services/core/java/com/android/server/pm/GosPackageStatePermissions.java
+index 66a2b817c80a75d0f6bcc8bdaa912d2800536f5a..1cedb9b8314b5dd0559352b97fa982c74b47fa56 100644
+--- a/services/core/java/com/android/server/pm/GosPackageStatePermissions.java
++++ b/services/core/java/com/android/server/pm/GosPackageStatePermissions.java
+@@ -125,6 +125,14 @@ class GosPackageStatePermissions {
+                 .readWriteFields(FIELD_PACKAGE_FLAGS)
+                 .apply(GmsCompatApp.PKG_NAME, computer);
+ 
++        // Graphite (patch 0653): the Graphite settings app may toggle exec-spawning for sandboxed
++        // Google Play services, for the Play Integrity "strong integrity" native-hook option. That
++        // option is off by default and gated behind an in-app warning with a countdown. Scoped to
++        // the exec-spawning flags only (no other hardening) and same-user only (no cross-user).
++        builder()
++                .readWriteFlags(USE_EXEC_SPAWNING_NON_DEFAULT, USE_EXEC_SPAWNING)
++                .apply("org.graphite.parts", computer);
++
+         @GosPackageStateFlag.Enum int[] settingsReadWriteFlags = {
+                 ALLOW_ACCESS_TO_OBB_DIRECTORY,
+                 BLOCK_NATIVE_DEBUGGING_NON_DEFAULT,

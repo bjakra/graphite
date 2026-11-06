@@ -1,0 +1,45 @@
+title = "Play Integrity native hook: exec-spawning toggle for Play"
+description = """
+RELAXES AN EXPLOIT MITIGATION FOR PLAY SERVICES, USER-GATED (user approval 2026-11-06). Off by
+default. Grants the Graphite settings app (org.graphite.parts) write access to just the
+USE_EXEC_SPAWNING / USE_EXEC_SPAWNING_NON_DEFAULT GosPackageState flags, same-user only, so the
+"Strong integrity (native hook)" switch in Play Integrity settings can turn exec-based spawning off
+for com.google.android.gms by itself. That is required for a Zygisk module (bundled ReZygisk + Play
+Integrity Fork, patch 0654) to inject into the sandboxed Play services process and hook DroidGuard's
+native property reads — the piece patch 0652's Java-level spoof cannot cover.
+
+frameworks/base: GosPackageStatePermissions grants org.graphite.parts readWrite on the two
+exec-spawning flags only (no other hardening flags, no cross-user). This is deliberately far narrower
+than the Settings app's grant.
+
+The switch itself and its warning live in the graphite_parts repo (KeyboxFragment): enabling it opens
+a confirmation dialog whose button is disabled for a 10 s countdown, then calls
+AswUseExecSpawning.I.set(editor, false) + killUidAfterApply() for com.google.android.gms; disabling it
+restores the default (exec-spawning on). exec-spawning stays ON for every other process.
+
+SECURITY NOTE: turning this on removes exec-based spawning (per-process re-exec / ASLR
+re-randomization) for Google Play services, a large attack surface. It is off by default, reverts
+cleanly, and is gated behind an explicit warning with a countdown.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "No in-settings switch to enable the Zygisk native hook for Play; the user would have to disable exec-spawning for Google Play services manually in GrapheneOS Exploit protection settings."
+category = "feature"
+depends = []
+enabled = true
+notes = """
+Companion to 0652 (Java fingerprint spoof) and 0654 (bundled ReZygisk + PIF). The grant is the only
+framework change; the UI is in graphite_parts. GraphiteParts builds with platform_apis so it can call
+the hidden android.ext.settings.app.AswUseExecSpawning / android.content.pm.GosPackageState APIs. The
+grant is keyed to the calling appId and governs flags, not target package, so it technically lets
+GraphiteParts flip exec-spawning for any same-user package; the UI only ever targets
+com.google.android.gms. Needs on-device verification: that GMS respawns via Zygote after the flip and
+that the bundled Zygisk provider injects into GrapheneOS's Zygote.
+"""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0653-play-native-spawn --project <path> --new
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"
