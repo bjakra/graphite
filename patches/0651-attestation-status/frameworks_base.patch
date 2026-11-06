@@ -1,0 +1,115 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 01:12:59 +0100
+Subject: [PATCH] Play keybox: parse attestation for the status screen
+
+PlayKeybox.readAttestation() reads attestationSecurityLevel and the RootOfTrust
+(deviceLocked, verifiedBootState) out of a leaf, returning null on anything it
+can't parse. Used by GmsCompat's read-only attestation status screen.
+PlayKeyboxTest covers it.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+---
+ .../internal/gmscompat/PlayKeybox.java        | 58 +++++++++++++++++++
+ .../internal/gmscompat/PlayKeyboxTest.java    | 18 ++++++
+ 2 files changed, 76 insertions(+)
+
+diff --git a/core/java/com/android/internal/gmscompat/PlayKeybox.java b/core/java/com/android/internal/gmscompat/PlayKeybox.java
+index 75d7ac79d376069aaa0ae7fd8b9450c771a228b1..5308da01bd71b5843faed908f0e23e8ea623251a 100644
+--- a/core/java/com/android/internal/gmscompat/PlayKeybox.java
++++ b/core/java/com/android/internal/gmscompat/PlayKeybox.java
+@@ -744,6 +744,64 @@ public final class PlayKeybox {
+     // KeyMint AttestationApplicationId tag inside an AuthorizationList.
+     private static final int ATTESTATION_APPLICATION_ID_TAG = 709;
+ 
++    /** Read-only view of an attestation record, for the diagnostics screen. */
++    public static final class AttestationInfo {
++        /** attestationSecurityLevel: 0 Software, 1 TrustedEnvironment, 2 StrongBox, -1 unknown. */
++        public final int securityLevel;
++        /** True if a RootOfTrust was found and parsed. */
++        public final boolean hasRootOfTrust;
++        public final boolean deviceLocked;
++        /** verifiedBootState: 0 Verified, 1 SelfSigned, 2 Unverified, 3 Failed, -1 unknown. */
++        public final int verifiedBootState;
++
++        AttestationInfo(int securityLevel, boolean hasRootOfTrust, boolean deviceLocked,
++                int verifiedBootState) {
++            this.securityLevel = securityLevel;
++            this.hasRootOfTrust = hasRootOfTrust;
++            this.deviceLocked = deviceLocked;
++            this.verifiedBootState = verifiedBootState;
++        }
++    }
++
++    /**
++     * Parses the security level and RootOfTrust out of a leaf's attestation record. Returns null if
++     * the leaf carries no attestation or it can't be parsed; never throws.
++     */
++    public static AttestationInfo readAttestation(X509Certificate leaf) {
++        try {
++            byte[] value = leaf.getExtensionValue(ATTESTATION_EXTENSION_OID);
++            if (value == null) {
++                return null;
++            }
++            ASN1Sequence keyDescription = ASN1Sequence.getInstance(
++                    ASN1OctetString.getInstance(value).getOctets());
++            int securityLevel = -1;
++            try {
++                securityLevel = ASN1Enumerated.getInstance(keyDescription.getObjectAt(1))
++                        .getValue().intValue();
++            } catch (Exception ignored) {
++            }
++            for (ASN1Encodable field : keyDescription) {
++                if (!(field instanceof ASN1Sequence)) {
++                    continue; // only the software/tee AuthorizationLists are sequences
++                }
++                for (ASN1Encodable element : (ASN1Sequence) field) {
++                    ASN1TaggedObject tagged = ASN1TaggedObject.getInstance(element);
++                    if (tagged.getTagNo() != ROOT_OF_TRUST_TAG) {
++                        continue;
++                    }
++                    ASN1Sequence rot = ASN1Sequence.getInstance(tagged.getBaseObject());
++                    boolean locked = ASN1Boolean.getInstance(rot.getObjectAt(1)).isTrue();
++                    int state = ASN1Enumerated.getInstance(rot.getObjectAt(2)).getValue().intValue();
++                    return new AttestationInfo(securityLevel, true, locked, state);
++                }
++            }
++            return new AttestationInfo(securityLevel, false, false, -1);
++        } catch (Exception e) {
++            return null;
++        }
++    }
++
+     /**
+      * True if every certificate in the chain is signed by the next one and the last one is exactly
+      * {@code trustedRoot}. Used to accept only chains produced by this device's own KeyMint, so the
+diff --git a/core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java b/core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java
+index 111c84bd6d193f7b6fd57ad7b11f90d7911b92f6..72c97ae4e57f3d1b67f8db7b4d677cac45846021 100644
+--- a/core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java
++++ b/core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java
+@@ -97,6 +97,24 @@ public class PlayKeyboxTest {
+         assertTrue(PlayKeybox.attestedPackageNames(unattested).isEmpty());
+     }
+ 
++    @Test
++    public void readAttestationReportsSecurityLevelAndBootState() throws Exception {
++        KeyPair key = keyPair("EC");
++        X509Certificate leaf = certificate("Leaf", "Issuer", key.getPublic(), key.getPrivate(),
++                key.getPublic(), true);
++        PlayKeybox.AttestationInfo info = PlayKeybox.readAttestation(leaf);
++        assertTrue(info != null);
++        assertEquals("teeEnforced security level", 1, info.securityLevel);
++        assertTrue(info.hasRootOfTrust);
++        // attestationRecord() builds an unlocked, unverified (state 2) record.
++        assertFalse(info.deviceLocked);
++        assertEquals(2, info.verifiedBootState);
++
++        X509Certificate plain = certificate("Plain", "Issuer", key.getPublic(), key.getPrivate(),
++                key.getPublic(), false);
++        assertNull(PlayKeybox.readAttestation(plain));
++    }
++
+     @Test
+     public void mismatchedPrivateKeyIsRejected() throws Exception {
+         KeyboxMaterial keybox = createKeybox("EC");

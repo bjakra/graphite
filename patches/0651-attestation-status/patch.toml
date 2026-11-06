@@ -1,0 +1,42 @@
+title = "Key attestation status screen"
+description = """
+Adds a read-only "Attestation status" screen under the Play Integrity keybox settings
+(GmsCompat KeyboxActivity -> KeyboxStatusActivity). It generates a throwaway attested key with this
+device's KeyMint and shows what the hardware really reports (key storage / security level, bootloader
+locked state, verified boot colour, certificate root), the configured keybox's state (algorithms,
+validity, expiry), and -- only when the keybox is turned on -- what Google Play services sees instead
+(the re-signed, locked-bootloader values and the keybox's root). Nothing is changed or stored; the
+probe key is deleted after reading. Complements patch 0650: it is the "is my keybox working and is the
+bootloader reported as locked" diagnostic, built into settings rather than a separate app.
+
+frameworks/base: PlayKeybox.readAttestation() parses attestationSecurityLevel and the RootOfTrust
+(deviceLocked, verifiedBootState) out of a leaf, returning null on anything unparseable. Test:
+PlayKeyboxTest.readAttestationReportsSecurityLevelAndBootState.
+packages/apps/GmsCompat: KeyboxDiagnostics runs the self-test and the keybox preview in GmsCompat's
+own process (no new IPC, private keys never move); KeyboxStatusActivity renders it; KeyboxActivity
+gains the entry point and the manifest gains the (unexported) status activity.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "No attestation status / diagnostics screen; the keybox still works, there is just no built-in way to inspect the bootloader state or what Play would see."
+category = "feature"
+depends = ["0650-play-keybox"]
+enabled = true
+notes = """
+Depends on 0650 (reuses PlayKeybox and the GmsCompat keybox package / KeyboxStore). The self-test
+reads the device's REAL attestation because GmsCompat is excluded from the all-apps hook, so the
+"device" section is trustworthy even while "apply to all apps" is on. The preview re-signs the
+self-test chain through KeyboxStore only when the keybox is enabled. Read-only: generates and then
+deletes a throwaway AndroidKeyStore key, writes no settings.
+"""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0651-attestation-status --project <path> --new
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"
+
+[[change]]
+project = "packages/apps/GmsCompat"
+file = "packages_apps_GmsCompat.patch"

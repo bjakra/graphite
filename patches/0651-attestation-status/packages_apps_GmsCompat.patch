@@ -1,0 +1,374 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 01:12:59 +0100
+Subject: [PATCH] Play keybox: attestation status screen
+
+Adds a read-only "Attestation status" screen under the Play Integrity keybox
+settings. KeyboxDiagnostics generates a throwaway attested key to show what this
+device's KeyMint really reports (security level, bootloader locked state,
+verified boot, certificate root), the keybox's state, and -- when the keybox is
+on -- what Play sees instead (locked bootloader, keybox root). The probe key is
+deleted after reading and nothing is stored. KeyboxStatusActivity renders it;
+KeyboxActivity gains the entry point.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+---
+ AndroidManifest.xml                           |   6 +
+ res/values/strings.xml                        |  25 +++
+ .../gmscompat/keybox/KeyboxActivity.kt        |  10 ++
+ .../gmscompat/keybox/KeyboxDiagnostics.kt     | 109 +++++++++++++
+ .../gmscompat/keybox/KeyboxStatusActivity.kt  | 147 ++++++++++++++++++
+ 5 files changed, 297 insertions(+)
+ create mode 100644 src/app/grapheneos/gmscompat/keybox/KeyboxDiagnostics.kt
+ create mode 100644 src/app/grapheneos/gmscompat/keybox/KeyboxStatusActivity.kt
+
+diff --git a/AndroidManifest.xml b/AndroidManifest.xml
+index 1d1e2aab18f42669ce7d696a4bde6ca7abe45a17..f6b111c0ac7793435790b7dec840d6647e37a792 100644
+--- a/AndroidManifest.xml
++++ b/AndroidManifest.xml
+@@ -113,6 +113,12 @@
+             android:theme="@style/Theme.GmsCompat.Settings.FilterTouches"
+             android:label="@string/keybox_title" />
+ 
++        <activity
++            android:name=".keybox.KeyboxStatusActivity"
++            android:exported="false"
++            android:theme="@style/Theme.GmsCompat.Settings.FilterTouches"
++            android:label="@string/keybox_status_title" />
++
+         <!-- Intentionally unprotected, and disabled until the user turns on "apply to all apps"
+              (Graphite settings enables it per user). It only re-signs the calling app's own
+              device-attested chain. -->
+diff --git a/res/values/strings.xml b/res/values/strings.xml
+index 5a6e028db6cafbf3c3e734768daee70fa9387eb9..5faf1d9dfcedcc9c1fba14db84ed2ff7d0f7a4b4 100644
+--- a/res/values/strings.xml
++++ b/res/values/strings.xml
+@@ -240,6 +240,31 @@ Some carriers require an entitlement check (GSMA TS.43 with EAP-AKA authenticati
+     <string name="keybox_import_summary">Choose a keybox.xml file. Adding it doesn\'t turn it on.</string>
+     <string name="keybox_imported">Keybox added</string>
+     <string name="keybox_import_failed">This file isn\'t a valid keybox. Nothing was changed.</string>
++    <string name="keybox_status_title">Attestation status</string>
++    <string name="keybox_status_summary">Check your keybox, the bootloader state and what Play sees</string>
++    <string name="keybox_status_checking">Checking…</string>
++    <string name="keybox_status_device">This device</string>
++    <string name="keybox_status_keybox">Your keybox</string>
++    <string name="keybox_status_keybox_state">Keybox</string>
++    <string name="keybox_status_preview">What Play sees with the keybox on</string>
++    <string name="keybox_status_security_level">Key storage</string>
++    <string name="keybox_status_bootloader">Bootloader</string>
++    <string name="keybox_status_verified_boot">Verified boot</string>
++    <string name="keybox_status_root">Certificate root</string>
++    <string name="keybox_status_locked">Locked</string>
++    <string name="keybox_status_unlocked">Unlocked</string>
++    <string name="keybox_status_no_root_of_trust">No boot state in the attestation</string>
++    <string name="keybox_status_level_software">Software only</string>
++    <string name="keybox_status_level_tee">Hardware (TEE)</string>
++    <string name="keybox_status_level_strongbox">Hardware (StrongBox)</string>
++    <string name="keybox_status_boot_verified">Verified (green)</string>
++    <string name="keybox_status_boot_selfsigned">Self-signed (yellow)</string>
++    <string name="keybox_status_boot_unverified">Unverified (orange)</string>
++    <string name="keybox_status_boot_failed">Failed (red)</string>
++    <string name="keybox_status_unknown">Unknown</string>
++    <string name="keybox_status_hw_error">Key attestation unavailable</string>
++    <string name="keybox_status_hw_error_summary">This device couldn\'t produce a key attestation to check.</string>
++    <string name="keybox_status_footer">The device section is what your phone really reports. With the keybox on, Google Play services gets the values in the last section instead. Google can still reject a keybox, so a locked result here doesn\'t guarantee that Play Integrity passes.</string>
+     <string name="keybox_clear_title">Remove keybox</string>
+     <string name="keybox_clear_summary">Turn it off and delete the keybox from this profile</string>
+     <string name="keybox_clear_confirm">Remove the keybox from this profile?</string>
+diff --git a/src/app/grapheneos/gmscompat/keybox/KeyboxActivity.kt b/src/app/grapheneos/gmscompat/keybox/KeyboxActivity.kt
+index ec9fe098efef48a112664daadac7905c8d8d9dfa..15b7d74d28bf2cddd784371da866c5e787f86312 100644
+--- a/src/app/grapheneos/gmscompat/keybox/KeyboxActivity.kt
++++ b/src/app/grapheneos/gmscompat/keybox/KeyboxActivity.kt
+@@ -2,6 +2,7 @@ package app.grapheneos.gmscompat.keybox
+ 
+ import android.app.AlertDialog
+ import android.app.compat.gms.GmsCompat
++import android.content.Intent
+ import android.os.Bundle
+ import android.os.Handler
+ import android.os.Looper
+@@ -88,6 +89,15 @@ class KeyboxFragment : PreferenceFragmentCompat() {
+         }
+         screen.addPreference(importPref)
+ 
++        screen.addPreference(Preference(context).apply {
++            title = getString(R.string.keybox_status_title)
++            summary = getString(R.string.keybox_status_summary)
++            setOnPreferenceClickListener {
++                startActivity(Intent(requireContext(), KeyboxStatusActivity::class.java))
++                true
++            }
++        })
++
+         clearPref = Preference(context).apply {
+             title = getString(R.string.keybox_clear_title)
+             summary = getString(R.string.keybox_clear_summary)
+diff --git a/src/app/grapheneos/gmscompat/keybox/KeyboxDiagnostics.kt b/src/app/grapheneos/gmscompat/keybox/KeyboxDiagnostics.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..94f235b11c28a64afaf20dc1e36da5b2e3b10b4d
+--- /dev/null
++++ b/src/app/grapheneos/gmscompat/keybox/KeyboxDiagnostics.kt
+@@ -0,0 +1,109 @@
++package app.grapheneos.gmscompat.keybox
++
++import android.security.keystore.KeyGenParameterSpec
++import android.security.keystore.KeyProperties
++import com.android.internal.gmscompat.PlayKeybox
++import java.security.KeyPairGenerator
++import java.security.KeyStore
++import java.util.Date
++import java.security.cert.X509Certificate
++
++/**
++ * Read-only diagnostics for the attestation status screen. Generates a throwaway attested key to see
++ * what this device's KeyMint really reports, then, if a keybox is usable, shows what the keybox would
++ * turn that into. Nothing here changes any stored state.
++ */
++object KeyboxDiagnostics {
++    private const val PROBE_ALIAS = "graphite_keybox_status_probe"
++
++    data class Report(
++        val hardwareError: String?,
++        val securityLevel: Int,
++        val hasRootOfTrust: Boolean,
++        val deviceLocked: Boolean,
++        val verifiedBootState: Int,
++        val deviceRootSubject: String?,
++        val keyboxConfigured: Boolean,
++        val keyboxUsable: Boolean,
++        val keyboxAlgorithms: String?,
++        val keyboxExpiry: Date?,
++        val previewAvailable: Boolean,
++        val previewDeviceLocked: Boolean,
++        val previewVerifiedBootState: Int,
++        val previewRootSubject: String?,
++    )
++
++    fun run(): Report {
++        val state = KeyboxStore.state()
++        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
++        var error: String? = null
++        var securityLevel = -1
++        var hasRot = false
++        var locked = false
++        var bootState = -1
++        var rootSubject: String? = null
++        var previewAvailable = false
++        var previewLocked = false
++        var previewBootState = -1
++        var previewRoot: String? = null
++
++        try {
++            KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore").apply {
++                initialize(KeyGenParameterSpec.Builder(PROBE_ALIAS, KeyProperties.PURPOSE_SIGN)
++                    .setDigests(KeyProperties.DIGEST_SHA256)
++                    .setAttestationChallenge("graphite-status".toByteArray())
++                    .build())
++            }.generateKeyPair()
++
++            val chain = keyStore.getCertificateChain(PROBE_ALIAS)
++                ?: throw IllegalStateException("No attestation chain")
++            val leaf = chain.first() as X509Certificate
++            rootSubject = (chain.last() as X509Certificate).subjectX500Principal.name
++            val info = PlayKeybox.readAttestation(leaf)
++            if (info != null) {
++                securityLevel = info.securityLevel
++                hasRot = info.hasRootOfTrust
++                locked = info.deviceLocked
++                bootState = info.verifiedBootState
++            }
++
++            if (state.enabled) {
++                val encoded = PlayKeybox.encodeChain(chain.map { it as X509Certificate }
++                    .toTypedArray())
++                val rewritten = KeyboxStore.rewriteAttestationChain(encoded)
++                if (rewritten != null) {
++                    val newChain = PlayKeybox.decodeChain(rewritten)
++                    val newLeaf = newChain.first() as X509Certificate
++                    val preview = PlayKeybox.readAttestation(newLeaf)
++                    if (preview != null) {
++                        previewAvailable = true
++                        previewLocked = preview.deviceLocked
++                        previewBootState = preview.verifiedBootState
++                        previewRoot = (newChain.last() as X509Certificate).subjectX500Principal.name
++                    }
++                }
++            }
++        } catch (e: Exception) {
++            error = e.javaClass.simpleName
++        } finally {
++            runCatching { keyStore.deleteEntry(PROBE_ALIAS) }
++        }
++
++        return Report(
++            hardwareError = error,
++            securityLevel = securityLevel,
++            hasRootOfTrust = hasRot,
++            deviceLocked = locked,
++            verifiedBootState = bootState,
++            deviceRootSubject = rootSubject,
++            keyboxConfigured = state.configured,
++            keyboxUsable = state.usable,
++            keyboxAlgorithms = state.algorithms,
++            keyboxExpiry = state.earliestExpiry,
++            previewAvailable = previewAvailable,
++            previewDeviceLocked = previewLocked,
++            previewVerifiedBootState = previewBootState,
++            previewRootSubject = previewRoot,
++        )
++    }
++}
+diff --git a/src/app/grapheneos/gmscompat/keybox/KeyboxStatusActivity.kt b/src/app/grapheneos/gmscompat/keybox/KeyboxStatusActivity.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..641e69005159c9f10350ec3cf805a09ac4b70966
+--- /dev/null
++++ b/src/app/grapheneos/gmscompat/keybox/KeyboxStatusActivity.kt
+@@ -0,0 +1,147 @@
++package app.grapheneos.gmscompat.keybox
++
++import android.os.Bundle
++import android.os.Handler
++import android.os.Looper
++import android.text.format.DateFormat
++import androidx.preference.Preference
++import androidx.preference.PreferenceCategory
++import androidx.preference.PreferenceFragmentCompat
++import app.grapheneos.gmscompat.App
++import app.grapheneos.gmscompat.R
++import com.android.settingslib.collapsingtoolbar.CollapsingToolbarBaseActivity
++import com.android.settingslib.widget.FooterPreference
++
++class KeyboxStatusActivity : CollapsingToolbarBaseActivity() {
++    override fun onCreate(savedInstanceState: Bundle?) {
++        super.onCreate(savedInstanceState)
++        setTitle(R.string.keybox_status_title)
++        if (savedInstanceState == null) {
++            supportFragmentManager.beginTransaction()
++                .replace(com.android.settingslib.collapsingtoolbar.R.id.content_frame,
++                    KeyboxStatusFragment())
++                .commit()
++        }
++    }
++}
++
++class KeyboxStatusFragment : PreferenceFragmentCompat() {
++    private val mainHandler = Handler(Looper.getMainLooper())
++
++    override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
++        preferenceScreen = preferenceManager.createPreferenceScreen(preferenceManager.context)
++    }
++
++    override fun onResume() {
++        super.onResume()
++        showLoading()
++        App.bgExecutor().execute {
++            val report = KeyboxDiagnostics.run()
++            mainHandler.post { if (isAdded) show(report) }
++        }
++    }
++
++    private fun showLoading() {
++        val context = preferenceManager.context
++        val screen = preferenceManager.createPreferenceScreen(context)
++        screen.addPreference(Preference(context).apply {
++            title = getString(R.string.keybox_status_checking)
++            isSelectable = false
++        })
++        preferenceScreen = screen
++    }
++
++    private fun show(report: KeyboxDiagnostics.Report) {
++        val context = preferenceManager.context
++        val screen = preferenceManager.createPreferenceScreen(context)
++
++        fun category(titleRes: Int) = PreferenceCategory(context).apply {
++            setTitle(titleRes)
++            screen.addPreference(this)
++        }
++
++        fun PreferenceCategory.item(title: String, summary: String) {
++            addPreference(Preference(context).apply {
++                this.title = title
++                this.summary = summary
++                isSelectable = false
++                isIconSpaceReserved = false
++            })
++        }
++
++        // This device's real key attestation.
++        val device = category(R.string.keybox_status_device)
++        if (report.hardwareError != null) {
++            device.item(getString(R.string.keybox_status_hw_error),
++                getString(R.string.keybox_status_hw_error_summary))
++        } else {
++            device.item(getString(R.string.keybox_status_security_level),
++                securityLevelText(report.securityLevel))
++            if (report.hasRootOfTrust) {
++                device.item(getString(R.string.keybox_status_bootloader),
++                    if (report.deviceLocked) getString(R.string.keybox_status_locked)
++                    else getString(R.string.keybox_status_unlocked))
++                device.item(getString(R.string.keybox_status_verified_boot),
++                    verifiedBootText(report.verifiedBootState))
++            } else {
++                device.item(getString(R.string.keybox_status_bootloader),
++                    getString(R.string.keybox_status_no_root_of_trust))
++            }
++            report.deviceRootSubject?.let {
++                device.item(getString(R.string.keybox_status_root), it)
++            }
++        }
++
++        // The configured keybox.
++        val keybox = category(R.string.keybox_status_keybox)
++        when {
++            !report.keyboxConfigured ->
++                keybox.item(getString(R.string.keybox_status_keybox_state),
++                    getString(R.string.keybox_not_configured))
++            !report.keyboxUsable ->
++                keybox.item(getString(R.string.keybox_status_keybox_state),
++                    getString(R.string.keybox_not_valid_now))
++            else -> {
++                val expiry = report.keyboxExpiry?.let {
++                    DateFormat.getMediumDateFormat(context).format(it)
++                } ?: "?"
++                keybox.item(getString(R.string.keybox_status_keybox_state),
++                    getString(R.string.keybox_configured, report.keyboxAlgorithms, expiry))
++            }
++        }
++
++        // What the keybox turns attestation into (only when it's on).
++        if (report.previewAvailable) {
++            val preview = category(R.string.keybox_status_preview)
++            preview.item(getString(R.string.keybox_status_bootloader),
++                if (report.previewDeviceLocked) getString(R.string.keybox_status_locked)
++                else getString(R.string.keybox_status_unlocked))
++            preview.item(getString(R.string.keybox_status_verified_boot),
++                verifiedBootText(report.previewVerifiedBootState))
++            report.previewRootSubject?.let {
++                preview.item(getString(R.string.keybox_status_root), it)
++            }
++        }
++
++        screen.addPreference(FooterPreference(context).apply {
++            setTitle(R.string.keybox_status_footer)
++            isSelectable = false
++        })
++        preferenceScreen = screen
++    }
++
++    private fun securityLevelText(level: Int) = getString(when (level) {
++        0 -> R.string.keybox_status_level_software
++        1 -> R.string.keybox_status_level_tee
++        2 -> R.string.keybox_status_level_strongbox
++        else -> R.string.keybox_status_unknown
++    })
++
++    private fun verifiedBootText(state: Int) = getString(when (state) {
++        0 -> R.string.keybox_status_boot_verified
++        1 -> R.string.keybox_status_boot_selfsigned
++        2 -> R.string.keybox_status_boot_unverified
++        3 -> R.string.keybox_status_boot_failed
++        else -> R.string.keybox_status_unknown
++    })
++}
