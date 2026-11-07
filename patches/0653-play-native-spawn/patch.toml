@@ -6,7 +6,7 @@ USE_EXEC_SPAWNING / USE_EXEC_SPAWNING_NON_DEFAULT GosPackageState flags, same-us
 "Strong integrity (native hook)" switch in Play Integrity settings can turn exec-based spawning off
 for com.google.android.gms by itself. That is required for a Zygisk module (bundled ReZygisk + Play
 Integrity Fork, patch 0654) to inject into the sandboxed Play services process and hook DroidGuard's
-native property reads — the piece patch 0652's Java-level spoof cannot cover.
+native property reads.
 
 frameworks/base: GosPackageStatePermissions grants org.graphite.parts readWrite on the two
 exec-spawning flags only (no other hardening flags, no cross-user). This is deliberately far narrower
@@ -28,8 +28,10 @@ category = "feature"
 depends = []
 enabled = true
 notes = """
-Companion to 0652 (Java fingerprint spoof) and 0654 (bundled ReZygisk + PIF). The grant is the only
-framework change; the UI is in graphite_parts. GraphiteParts builds with platform_apis so it can call
+Companion to the bundled ReZygisk + Play Integrity Fork (vendor/graphite/prebuilt/PlayIntegrity, not a
+patch). The same switch sets Settings.Secure graphite_pif_enabled, which makes the root controller
+graphite-pi.sh install and enable the modules. The grant is the only framework change; the UI is in
+graphite_parts. GraphiteParts builds with platform_apis so it can call
 the hidden android.ext.settings.app.AswUseExecSpawning / android.content.pm.GosPackageState APIs. The
 grant is keyed to the calling appId and governs flags, not target package, so it technically lets
 GraphiteParts flip exec-spawning for any same-user package; the UI only ever targets

@@ -195,6 +195,26 @@ The Now Playing design (privacy, network gating, database updates) is described 
 `FLAG_SECURE` screen. Install it on the emulator with `adb install`, then run
 `adb shell settings put secure nfc_payment_default_component org.graphite.wallettest/.TestPaymentService`.
 
+## Play Integrity and LSPosed
+
+Graphite settings → Play Integrity keybox has a "Strong integrity (native hook)" switch (patch 0653, behind
+a 10 s warning). It turns exec-spawning off for Google Play services and sets `graphite_pif_enabled`, and a
+"Play Integrity Fork" submenu appears (fingerprint, updates, PIF's advanced options).
+
+The modules are bundled, not patched: `build.sh` (build step) runs `tools/apps/fetch_play_integrity_modules.py`,
+which downloads the latest release of Play Integrity Fork and ReZygisk and checks it against the SHA-256 GitHub
+reports. They are installed unchanged into `/system_ext/etc/graphite/pi/modules` (covered by verified boot).
+`vendor/graphite/prebuilt/PlayIntegrity/graphite-pi.sh`, started by init in KernelSU's domain, installs them with
+`ksud` once the switch is on (after checking the build-time hash, never over a newer installed version), copies
+the submenu's settings into PIF's `custom.pif.prop`, fetches the fingerprint with PIF's own `autopif4.sh`, and
+checks GitHub for module updates weekly. With `--skip-sync` the build keeps the copies it already fetched.
+
+Graphite settings → System app code loading (patch 0655, behind a 10 s warning) gives system apps the normal
+per-app "Dynamic code loading via memory" switch. LSPosed/Vector's manager runs in Shell and needs it there.
+
+`build.sh` also reinstalls the last KernelSU-Next kernel build (`kernel/pixel/out`) before `m` if the tree has
+another kernel, so a sync can't silently ship GrapheneOS's stock kernel.
+
 ## Kernel
 
 The Pixel 8 kernel lives in `kernel/pixel` (GrapheneOS `kernel_pixel_6.1`, branch `17`) and adds KernelSU-Next v3.4.2 through

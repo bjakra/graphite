@@ -1,0 +1,36 @@
+title = "Toggle: per-app memory DCL switch for system apps"
+description = """
+RELAXES AN EXPLOIT MITIGATION FOR SYSTEM APPS, USER-GATED (user request 2026-11-07). Off by default.
+GrapheneOS makes "Dynamic code loading via memory" immutable and restricted for system apps. That stops
+LSPosed/Vector's parasitic manager, which runs inside com.android.shell, and modules scoped to system
+apps such as SystemUI (they bootloop or fail to load).
+
+AswRestrictMemoryDynCodeLoading.getImmutableValue now has two paths, chosen by the Settings.Global key
+graphite_system_app_memory_dcl (written by the switch in Graphite settings, graphite_parts repo):
+  - off (default): exactly the stock code path, the value stays immutable and restricted.
+  - on: returns null, so system apps get the normal per-app switch in their Exploit protection settings.
+    The default stays restricted (getDefaultValueInner is unchanged), so an app is only allowed after
+    the user turns it off for that app. Turning the key off again restores the immutable restriction,
+    whatever the per-app state is, for processes started after that.
+
+Only memory DCL is covered, not storage or WebView DCL. No sepolicy change is needed: app domains are
+allowed execmem and the restriction comes only from the per-process flags SELinuxFlags computes from
+this value. Based on the patch by raxod502 in https://github.com/JingMatrix/Vector/discussions/340, which
+removed the check unconditionally and also the user-app compat-mode branch; that branch is kept here.
+
+SECURITY NOTE: with the key on and an app allowed, a compromised system app can run code from memory.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "The Graphite switch for system app memory DCL has no effect: LSPosed/Vector's parasitic manager in Shell and modules that load code from memory in system apps stay blocked unless they bypass the check themselves."
+category = "feature"
+depends = []
+enabled = true
+notes = ""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0655-system-app-memory-dcl --project <path> --new
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"

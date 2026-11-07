@@ -192,9 +192,38 @@ new_release_stamp() {
     log "release build number $num"
 }
 
+# Inputs that live outside git and that a repo sync can't restore by itself.
+#  - The KernelSU-Next + SuSFS kernel (tools/kernel/build-husky.sh): a sync of the kernel prebuilt project
+#    brings back GrapheneOS's stock kernel, so the last kernel build is installed again if it differs.
+#  - The Play Integrity Zygisk modules (vendor/graphite/prebuilt/PlayIntegrity): the latest release of each,
+#    verified against GitHub's digest. --skip-sync keeps already fetched copies without going online.
+prepare_inputs() {
+    local dist="$GRAPHITE_ROOT/kernel/pixel/out/shusky/dist/Image.lz4"
+    local dest="$SRC_DIR/$KERNEL_PROJECT/grapheneos/Image.lz4"
+    if [[ $DEVICE == husky && -f $dist ]]; then
+        if cmp -s "$dist" "$dest"; then
+            ok "KernelSU-Next kernel installed"
+        else
+            log "installing the KernelSU-Next kernel from kernel/pixel/out (the tree has another one)"
+            "$GRAPHITE_ROOT/tools/kernel/build-husky.sh" --install-only || die "kernel install failed"
+        fi
+    elif [[ $DEVICE == husky ]]; then
+        warn "no KernelSU-Next kernel build in kernel/pixel/out: building with the tree's kernel (tools/kernel/build-husky.sh)"
+    fi
+    local pi="$SRC_DIR/vendor/graphite/prebuilt/PlayIntegrity/modules"
+    if (( SKIP_SYNC )) && compgen -G "$pi/*.zip" >/dev/null; then
+        ok "Play Integrity modules: keeping the fetched copies (--skip-sync)"
+    else
+        log "fetching the Play Integrity modules"
+        run_logged python3 -I "$GRAPHITE_ROOT/tools/apps/fetch_play_integrity_modules.py" "$pi" \
+            || warn "Play Integrity modules unavailable: this build won't bundle them"
+    fi
+}
+
 do_build() {
     step "build $TARGET"
     [[ -d "$SRC_DIR/vendor/google_devices/$DEVICE" ]] || die "vendor files missing — run the vendor step"
+    prepare_inputs
     if (( CLEAN )); then
         log "removing $DEVICE_OUT_DIR"
         rm -rf "${SRC_DIR:?}/$DEVICE_OUT_DIR"

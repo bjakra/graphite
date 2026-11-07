@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 14:37:07 +0100
+Subject: [PATCH] Toggle: per-app memory DCL switch for system apps
+
+Adds the Settings.Global switch graphite_system_app_memory_dcl, off by default. Off keeps the stock
+immutable restriction. On gives system apps the normal per-app "Dynamic code loading via memory"
+switch, still restricted by default, so LSPosed/Vector's manager in Shell and modules scoped to system
+apps can be allowed per app. Based on raxod502's patch in JingMatrix/Vector discussion 340.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---
+ .../settings/app/AswRestrictMemoryDynCodeLoading.java  | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/core/java/android/ext/settings/app/AswRestrictMemoryDynCodeLoading.java b/core/java/android/ext/settings/app/AswRestrictMemoryDynCodeLoading.java
+index 9ee310df68397c25b71ae5380374b48fec6a6f7f..56cde46ab9714ecbab5bb703a1e3ff8836f7a779 100644
+--- a/core/java/android/ext/settings/app/AswRestrictMemoryDynCodeLoading.java
++++ b/core/java/android/ext/settings/app/AswRestrictMemoryDynCodeLoading.java
+@@ -4,7 +4,9 @@ import android.content.Context;
+ import android.content.pm.ApplicationInfo;
+ import android.content.pm.GosPackageState;
+ import android.content.pm.GosPackageStateFlag;
++import android.ext.settings.BoolSetting;
+ import android.ext.settings.ExtSettings;
++import android.ext.settings.Setting;
+ import android.util.ArraySet;
+ 
+ import com.android.internal.R;
+@@ -22,6 +24,11 @@ public class AswRestrictMemoryDynCodeLoading extends AppSwitch {
+         compatChangeToDisableHardening = AppCompatProtos.ALLOW_MEMORY_DYN_CODE_LOADING;
+     }
+ 
++    // Graphite settings switch, off by default. Off: stock behavior. On: system apps get the same
++    // per-app switch as other apps; they stay restricted until it is changed for that app.
++    private static final BoolSetting ALLOW_CONFIGURING_SYSTEM_APPS = new BoolSetting(
++            Setting.Scope.GLOBAL, "graphite_system_app_memory_dcl", false);
++
+     private static volatile ArraySet<String> allowedSystemPkgs;
+ 
+     private static boolean shouldAllowByDefaultToSystemPkg(Context ctx, String pkg) {
+@@ -45,6 +52,9 @@ public class AswRestrictMemoryDynCodeLoading extends AppSwitch {
+             if (SELinuxFlags.isSystemAppSepolicyWeakeningAllowed()) {
+                 return null;
+             }
++            if (ALLOW_CONFIGURING_SYSTEM_APPS.get(ctx, userId)) {
++                return null;
++            }
+             si.immutabilityReason = IR_IS_SYSTEM_APP;
+             return true;
+         }
