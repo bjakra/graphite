@@ -1,0 +1,56 @@
+title = "Keybox delivery endpoint for the Graphite mirror resolver"
+description = """
+Companion of the mirror resolver feature in graphite_parts (the resolver itself, which fetches and
+rotates community-keybox-mirror XML files, is NOT part of this patch): adds a small Binder endpoint
+KeyboxImportService to GmsCompat that the resolver's settings app delivers an already-locally
+validated keybox file to. The service runs the exact same PlayKeybox.parse validation as a manual
+import on KeyboxActivity before storing, so nothing reaches the store that a hand-import would
+have rejected; invalid deliveries are logged and refused, never stored. It never touches the
+"enabled" switch (rotation only refreshes which validated box is stored; enabling re-signing stays
+the user's explicit choice on 0650). The private key stays in GmsCompat every step of the way, same
+as a manual import; the claim in 0650's notes that remote delivery is out of scope is superseded by
+this companion, which ports that one missing piece.
+
+Adds a play_keybox.provenance sidecar record ("where the current box came from"; filename label
+only, set by the resolver on every delivery it makes: "mirror: <source id>") next to the keybox
+file so both Graphite settings and a future GmsCompat status screen can state the current origin to
+the user in plain text. It is deleted on clear() in lock-step with the other 0650 files. When import
+comes from a manual KeyboxActivity import, provenance stays as previously recorded (or absent).
+
+SKIPS NOTHING: this patch RELAXES NOTHING AT THE FRAMEWORK LEVEL. All it does is expose the
+existing per-user keybox import path for one specific, permission-gated external caller.
+
+Security: the service is exported with android:permission=org.graphite.parts.permission.IMPORT_KEYBOX,
+a permission defined and platform-signed in GraphiteParts' manifest, so any caller either holds that
+permission (only GraphiteParts can, it being platform-signed) or is rejected before any code of the
+service runs. Delivered bytes are inert data: parsed and validated, or refused - never executed.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "The mirror resolver in Graphite settings cannot deliver a validated keybox to the keybox store; the resolver can still fetch, validate and pool boxes, and GmsCompat keeps importing manually opened boxes only."
+category = "feature"
+depends = ["0650-play-keybox"]
+enabled = true
+notes = """
+Design: an exported AIDL service IKeyboxImportService (aidl dir + local_include_dirs were already
+configured in GmsCompat) carrying a synchronous importKeybox(xml, provenance) -> earliestExpiry
+call, instead of shell or file-based delivery: a separate AIDL copy is compiled into graphite_parts.
+The Graphite side must present an XML box that PlayKeybox.parse accepts BEFORE delivery (play it
+safe: two independent parsers/validators : Graphite performs its own light parse to catch obviously
+wrong payloads and then GmsCompat's import re-parses on arrival), while GmsCompat permanently acts
+as the source of truth.
+
+Emulator testing of a framework change needs `m framework-minus-apex`? Not needed here: this patch
+is app-only inside GmsCompat (aidl + manifest service). Test: ./dev.sh build GmsCompat, then
+./dev.sh push system system_ext and reboot, then verify binding from GraphiteParts.
+
+AIDL within the patch depends on KeyboxStore.importKeybox(xml) - a single enum-arg overload is
+added with provenance: String? = null and makes state() surface provenance too.
+"""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0661-keybox-mirror-delivery --project <path> --new
+
+[[change]]
+project = "packages/apps/GmsCompat"
+file = "packages_apps_GmsCompat.patch"

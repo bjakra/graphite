@@ -1,0 +1,208 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 17:23:44 +0100
+Subject: [PATCH] Keybox import endpoint for the Graphite mirror resolver
+ (0661)
+
+Add KeyboxImportService: a permission-gated Binder endpoint (AIDL
+IKeyboxImportService, package app.grapheneos.gmscompat.keybox) that the
+graphite_parts mirror resolver delivers an already-locally-validated keybox
+XML to. The service re-runs the same PlayKeybox.parse validation as a manual
+import on KeyboxActivity before storing 0600; invalid deliveries are logged and
+refused. It never touches the enabled switch. Exported behind
+org.graphite.parts.permission.IMPORT_KEYBOX (signature-level, defined in
+GraphiteParts), so only that platform-signed app can call it.
+
+Add a play_keybox.provenance sidecar to KeyboxStore ("mirror: <source>"),
+surfaced via KeyboxState.provenance and set by importKeybox(xml, provenance);
+cleared in lock-step on clear().
+
+---
+ AndroidManifest.xml                           |  8 ++++
+ .../keybox/IKeyboxImportService.aidl          | 16 +++++++
+ .../gmscompat/keybox/KeyboxImportService.kt   | 46 +++++++++++++++++++
+ .../gmscompat/keybox/KeyboxStore.kt           | 22 ++++++++-
+ 4 files changed, 91 insertions(+), 1 deletion(-)
+ create mode 100644 src/app/grapheneos/gmscompat/keybox/IKeyboxImportService.aidl
+ create mode 100644 src/app/grapheneos/gmscompat/keybox/KeyboxImportService.kt
+
+diff --git a/AndroidManifest.xml b/AndroidManifest.xml
+index f6b111c0ac7793435790b7dec840d6647e37a792..4c6c8d16f29b1ab5a8e42f162fd9d34ed4380119 100644
+--- a/AndroidManifest.xml
++++ b/AndroidManifest.xml
+@@ -127,6 +127,14 @@
+             android:enabled="false"
+             android:exported="true" />
+ 
++        <!-- Keybox delivery from Graphite settings' mirror resolver (patch 0661). Only
++             org.graphite.parts holds the defining platform-signed permission. Delivered XML is
++             validated like a manual import; never code. -->
++        <service
++            android:name=".keybox.KeyboxImportService"
++            android:exported="true"
++            android:permission="org.graphite.parts.permission.IMPORT_KEYBOX" />
++
+         <receiver
+             android:name=".keybox.KeyboxPackageReceiver"
+             android:exported="false">
+diff --git a/src/app/grapheneos/gmscompat/keybox/IKeyboxImportService.aidl b/src/app/grapheneos/gmscompat/keybox/IKeyboxImportService.aidl
+new file mode 100644
+index 0000000000000000000000000000000000000000..88ee337003401fd71d6550b08a6bec2130a067f1
+--- /dev/null
++++ b/src/app/grapheneos/gmscompat/keybox/IKeyboxImportService.aidl
+@@ -0,0 +1,16 @@
++// Delivered by the graphite_parts mirror resolver (patch 0661). The service validates
++// delivered XML with the same PlayKeybox.parse path as a manual import before storing it;
++// this file carries data only, never code.
++package app.grapheneos.gmscompat.keybox;
++
++interface IKeyboxImportService {
++    /**
++     * Validates and stores [xml], like a manual import on KeyboxActivity. The enabled state of the
++     * keybox is deliberately not touched (rotation only refreshes the stored box).
++     *
++     * Returns the earliest certificate expiry as epoch millis, or -1 when the box was rejected or
++     * storing failed, with [detail][0] holding a short reason. [provenance] is a short label of
++     * where the box came from (see KeyboxStore.setProvenance), or null to keep it unknown.
++     */
++    long importKeybox(in byte[] xml, in @nullable String provenance, out String[] detail);
++}
+diff --git a/src/app/grapheneos/gmscompat/keybox/KeyboxImportService.kt b/src/app/grapheneos/gmscompat/keybox/KeyboxImportService.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..6d855d29c7d9328a1f041602229dde9c56f5f938
+--- /dev/null
++++ b/src/app/grapheneos/gmscompat/keybox/KeyboxImportService.kt
+@@ -0,0 +1,46 @@
++package app.grapheneos.gmscompat.keybox
++
++import android.app.Service
++import android.content.Intent
++import android.os.IBinder
++import android.util.Log
++
++/**
++ * Delivery endpoint for Graphite settings' community keybox mirror resolver (patch 0661, resolver
++ * lives in graphite_parts). Exported to that app only: the manifest guards it with
++ * org.graphite.parts.permission.IMPORT_KEYBOX, defined platform-signed by GraphiteParts.
++ *
++ * Delivered XML is data: it runs the same PlayKeybox.parse validation as a manual import on
++ * KeyboxActivity. Nothing else changes (the enabled switch stays as the user set it), and the
++ * private key stays in the box file inside this process, exactly like any manual import.
++ */
++class KeyboxImportService : Service() {
++    private val binder = object : IKeyboxImportService.Stub() {
++        override fun importKeybox(xml: ByteArray?, provenance: String?, detail: Array<String>?): Long {
++            if (xml == null || detail == null) return reject(detail, "invalid-request")
++            val proven =
++                provenance?.replace('\n', ' ')?.replace('\r', ' ')?.takeIf { it.isNotBlank() }
++            // provenance is odd trivia, but keep it printable, short and free of caller's newlines.
++            Log.d(TAG, "keybox delivery from ${proven?.take(40)?.let { it + "…" } ?: "unknown source"}")
++            return try {
++                val state = KeyboxStore.importKeybox(xml, proven)
++                detail[0] = "imported"
++                state.earliestExpiry?.time ?: -1L
++            } catch (e: Exception) {
++                Log.w(TAG, "Rejected delivered keybox: ${e.javaClass.simpleName}")
++                reject(detail, "invalid: ${e.javaClass.simpleName}")
++            }
++        }
++    }
++
++    private fun reject(detail: Array<String>?, reason: String): Long {
++        detail?.let { it[0] = reason }
++        return -1L
++    }
++
++    override fun onBind(intent: Intent?): IBinder = binder
++
++    companion object {
++        private const val TAG = "PlayKeyboxImport"
++    }
++}
+diff --git a/src/app/grapheneos/gmscompat/keybox/KeyboxStore.kt b/src/app/grapheneos/gmscompat/keybox/KeyboxStore.kt
+index 134663d2ed1b1fd141ecb3eac881e7e8cb14a861..52cc03b529d60862f3162f9066af0b592f344fa7 100644
+--- a/src/app/grapheneos/gmscompat/keybox/KeyboxStore.kt
++++ b/src/app/grapheneos/gmscompat/keybox/KeyboxStore.kt
+@@ -17,6 +17,7 @@ data class KeyboxState(
+     val usable: Boolean,
+     val algorithms: String?,
+     val earliestExpiry: Date?,
++    val provenance: String?,
+ )
+ 
+ /** Which verified boot key the re-signed attestation reports. See [KeyboxStore.bootConfig]. */
+@@ -42,6 +43,9 @@ object KeyboxStore {
+     private const val KEYBOX_FILE = "play_keybox.xml"
+     private const val ENABLED_FILE = "play_keybox.enabled"
+     private const val BOOTCFG_FILE = "play_keybox.bootcfg"
++    // Where the current box came from ("imported from <x>"); the mirror resolver delivery records
++    // this so the status row can show the source of automatically rotated boxes (patch 0661).
++    private const val PROVENANCE_FILE = "play_keybox.provenance"
+ 
+     // Verified boot key hashes, user-provided; see the patch notes - verify against the published
+     // husky AVB keys and re-check on AVB key rotations. A wrong value only fails an allowlist; it
+@@ -60,6 +64,7 @@ object KeyboxStore {
+     private var loaded = false
+     private var parsed: PlayKeybox.ParsedKeybox? = null
+     private var enabled = false
++    private var provenance: String? = null
+     private var bootCfg = DEFAULT_BOOT_CONFIG
+ 
+     private val ctx: Context
+@@ -68,6 +73,7 @@ object KeyboxStore {
+     private fun keyboxFile() = File(ctx.noBackupFilesDir, KEYBOX_FILE)
+     private fun enabledFile() = File(ctx.noBackupFilesDir, ENABLED_FILE)
+     private fun bootcfgFile() = File(ctx.noBackupFilesDir, BOOTCFG_FILE)
++    private fun provenanceFile() = File(ctx.noBackupFilesDir, PROVENANCE_FILE)
+ 
+     private fun isUserUnlocked(): Boolean {
+         return ctx.getSystemService(UserManager::class.java)?.isUserUnlocked == true
+@@ -78,6 +84,8 @@ object KeyboxStore {
+         loaded = true
+         enabled = runCatching { enabledFile().readText() == "1" }.getOrDefault(false)
+         bootCfg = runCatching { parseBootCfg(bootcfgFile().readText()) }.getOrDefault(DEFAULT_BOOT_CONFIG)
++        provenance = provenanceFile().takeIf { it.isFile }
++            ?.let { runCatching { it.readText() }.getOrNull()?.takeIf { t -> t.isNotBlank() } }
+         parsed = if (keyboxFile().isFile) {
+             try {
+                 // Expiry is checked when the feature is used, not treated as file corruption.
+@@ -103,6 +111,7 @@ object KeyboxStore {
+             usable = usable,
+             algorithms = current?.algorithms,
+             earliestExpiry = current?.earliestExpiry,
++            provenance = provenance,
+         )
+     }
+ 
+@@ -119,12 +128,22 @@ object KeyboxStore {
+     }
+ 
+     /** Validates first; malformed input never replaces the existing keybox or changes the switch. */
+-    fun importKeybox(xml: ByteArray): KeyboxState = synchronized(lock) {
++    fun importKeybox(xml: ByteArray, provenance: String? = null): KeyboxState = synchronized(lock) {
+         ensureLoadedLocked()
+         val newParsed = PlayKeybox.parse(xml)
+         // AtomicFile preserves the old file on failure. The enabled setting is deliberately not
+         // touched, so there is no two-file transaction to roll back.
+         writeAtomic(keyboxFile(), xml)
++        // Only after a successful import: record where the box came from for the status row.
++        runCatching {
++            if (provenance.isNullOrBlank()) {
++                AtomicFile(provenanceFile()).delete()
++                this.provenance = null
++            } else {
++                writeAtomic(provenanceFile(), provenance.toByteArray())
++                this.provenance = provenance
++            }
++        }
+         parsed = newParsed
+         loaded = true
+         state()
+@@ -141,6 +160,7 @@ object KeyboxStore {
+         AtomicFile(keyboxFile()).delete()
+         AtomicFile(enabledFile()).delete()
+         AtomicFile(bootcfgFile()).delete()
++        AtomicFile(provenanceFile()).delete()
+     }
+ 
+     /** The verified boot fields the rewrite reports. Default = Original key/hash, Verified. */
