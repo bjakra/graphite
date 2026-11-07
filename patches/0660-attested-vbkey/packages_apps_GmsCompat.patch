@@ -1,0 +1,759 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 15:23:29 +0100
+Subject: [PATCH] Play keybox: verified boot key setting (original / GrapheneOS
+ / custom)
+
+KeyboxStore persists the mode as a 0600 no-backup file, resolves it to a
+PlayKeybox.BootOverride in-process and passes it to maybeRewrite; the keybox
+screen gains a Verified boot key entry with a custom 64-hex option.
+---
+ res/values/strings.xml                        |  9 +++
+ .../gmscompat/keybox/KeyboxActivity.kt        | 72 +++++++++++++++++
+ .../gmscompat/keybox/KeyboxStore.kt           | 77 ++++++++++++++++++-
+ 3 files changed, 157 insertions(+), 1 deletion(-)
+
+diff --git a/res/values/strings.xml b/res/values/strings.xml
+index 5faf1d9dfcedcc9c1fba14db84ed2ff7d0f7a4b4..98bd3d21fdb81b2e5d1bea74c902eb6a9154ee9c 100644
+--- a/res/values/strings.xml
++++ b/res/values/strings.xml
+@@ -270,4 +270,13 @@ Some carriers require an entitlement check (GSMA TS.43 with EAP-AKA authenticati
+     <string name="keybox_clear_confirm">Remove the keybox from this profile?</string>
+     <string name="keybox_clear_button">Remove</string>
+     <string name="keybox_explanation">When this is on, Google Play services gets key attestations signed with your keybox instead of with this phone\'s own key, and they report a locked bootloader. By default only Google Play services is affected; you can extend this to other apps in Graphite settings.\n\nGoogle can still reject a keybox, so this doesn\'t guarantee that Play Integrity passes.\n\nThe keybox stays in this profile on this phone. It isn\'t backed up, and it\'s deleted when Google Play services is uninstalled.</string>
++    <string name="keybox_bootkey_title">Verified boot key</string>
++    <string name="keybox_bootkey_original">Original (no spoofing)</string>
++    <string name="keybox_bootkey_graphene">GrapheneOS (Pixel 8 Pro)</string>
++    <string name="keybox_bootkey_custom">Custom…</string>
++    <string name="keybox_bootkey_custom_hint">64 hex characters (32 bytes)</string>
++    <string name="keybox_bootkey_custom_invalid">Enter 64 hex characters. Nothing was changed.</string>
++    <string name="keybox_bootkey_summary_original">Original (the device\'s real key)</string>
++    <string name="keybox_bootkey_summary_graphene">GrapheneOS (Pixel 8 Pro)</string>
++    <string name="keybox_bootkey_summary_custom">Custom: %1$s…</string>
+ </resources>
+diff --git a/src/app/grapheneos/gmscompat/keybox/KeyboxActivity.kt b/src/app/grapheneos/gmscompat/keybox/KeyboxActivity.kt
+index 15b7d74d28bf2cddd784371da866c5e787f86312..e844b89bef3e280d478b5053574bb3b1848bc1e1 100644
+--- a/src/app/grapheneos/gmscompat/keybox/KeyboxActivity.kt
++++ b/src/app/grapheneos/gmscompat/keybox/KeyboxActivity.kt
+@@ -6,7 +6,9 @@ import android.content.Intent
+ import android.os.Bundle
+ import android.os.Handler
+ import android.os.Looper
++import android.text.InputType
+ import android.text.format.DateFormat
++import android.widget.EditText
+ import android.widget.Toast
+ import androidx.activity.result.contract.ActivityResultContracts
+ import androidx.preference.Preference
+@@ -36,6 +38,7 @@ class KeyboxFragment : PreferenceFragmentCompat() {
+     private lateinit var enabledPref: SwitchPreferenceCompat
+     private lateinit var statusPref: Preference
+     private lateinit var importPref: Preference
++    private lateinit var bootKeyPref: Preference
+     private lateinit var clearPref: Preference
+     private val mainHandler = Handler(Looper.getMainLooper())
+ 
+@@ -98,6 +101,15 @@ class KeyboxFragment : PreferenceFragmentCompat() {
+             }
+         })
+ 
++        bootKeyPref = Preference(context).apply {
++            title = getString(R.string.keybox_bootkey_title)
++            setOnPreferenceClickListener {
++                showBootKeyDialog()
++                true
++            }
++        }
++        screen.addPreference(bootKeyPref)
++
+         clearPref = Preference(context).apply {
+             title = getString(R.string.keybox_clear_title)
+             summary = getString(R.string.keybox_clear_summary)
+@@ -133,6 +145,13 @@ class KeyboxFragment : PreferenceFragmentCompat() {
+         enabledPref.isChecked = state.enabled && playInstalled
+         enabledPref.isEnabled = state.usable && playInstalled
+         clearPref.isEnabled = state.configured
++        val boot = KeyboxStore.bootKeyConfig()
++        bootKeyPref.summary = when (boot.mode) {
++            BootKeyMode.ORIGINAL -> getString(R.string.keybox_bootkey_summary_original)
++            BootKeyMode.GRAPHENE -> getString(R.string.keybox_bootkey_summary_graphene)
++            BootKeyMode.CUSTOM -> getString(R.string.keybox_bootkey_summary_custom,
++                boot.customHex?.take(16) ?: "")
++        }
+         statusPref.title = when {
+             !playInstalled -> getString(R.string.keybox_play_missing)
+             !state.configured -> getString(R.string.keybox_not_configured)
+@@ -144,4 +163,57 @@ class KeyboxFragment : PreferenceFragmentCompat() {
+             }
+         }
+     }
++
++    private fun showBootKeyDialog() {
++        val context = requireContext()
++        val current = KeyboxStore.bootKeyConfig()
++        val labels = arrayOf(
++            getString(R.string.keybox_bootkey_original),
++            getString(R.string.keybox_bootkey_graphene),
++            getString(R.string.keybox_bootkey_custom))
++        val checked = when (current.mode) {
++            BootKeyMode.ORIGINAL -> 0
++            BootKeyMode.GRAPHENE -> 1
++            BootKeyMode.CUSTOM -> 2
++        }
++        AlertDialog.Builder(context)
++            .setTitle(R.string.keybox_bootkey_title)
++            .setSingleChoiceItems(labels, checked) { dialog, which ->
++                dialog.dismiss()
++                when (which) {
++                    0 -> applyBootKey(BootKeyMode.ORIGINAL, null)
++                    1 -> applyBootKey(BootKeyMode.GRAPHENE, null)
++                    else -> showCustomBootKeyDialog(current.customHex)
++                }
++            }
++            .setNegativeButton(android.R.string.cancel, null)
++            .show()
++    }
++
++    private fun showCustomBootKeyDialog(prefill: String?) {
++        val context = requireContext()
++        val input = EditText(context).apply {
++            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
++            hint = getString(R.string.keybox_bootkey_custom_hint)
++            setText(prefill ?: "")
++        }
++        AlertDialog.Builder(context)
++            .setTitle(R.string.keybox_bootkey_custom)
++            .setView(input)
++            .setPositiveButton(android.R.string.ok) { _, _ ->
++                if (!applyBootKey(BootKeyMode.CUSTOM, input.text.toString())) {
++                    Toast.makeText(context, R.string.keybox_bootkey_custom_invalid,
++                        Toast.LENGTH_LONG).show()
++                }
++            }
++            .setNegativeButton(android.R.string.cancel, null)
++            .show()
++    }
++
++    /** Persists the chosen mode; returns false if a CUSTOM key was rejected (nothing changed). */
++    private fun applyBootKey(mode: BootKeyMode, customHex: String?): Boolean {
++        val ok = runCatching { KeyboxStore.setBootKeyConfig(mode, customHex) }.isSuccess
++        refresh()
++        return ok
++    }
+ }
+diff --git a/src/app/grapheneos/gmscompat/keybox/KeyboxStore.kt b/src/app/grapheneos/gmscompat/keybox/KeyboxStore.kt
+index 34b7c634c2375a3fb64c80971e7e312204772c7b..8fe132f121cab6438bbaca767183bac3e5aa61ea 100644
+--- a/src/app/grapheneos/gmscompat/keybox/KeyboxStore.kt
++++ b/src/app/grapheneos/gmscompat/keybox/KeyboxStore.kt
+@@ -19,22 +19,38 @@ data class KeyboxState(
+     val earliestExpiry: Date?,
+ )
+ 
++/** Which verified boot key the re-signed attestation reports. See [KeyboxStore.bootKeyConfig]. */
++enum class BootKeyMode { ORIGINAL, GRAPHENE, CUSTOM }
++
++data class BootKeyConfig(val mode: BootKeyMode, val customHex: String?)
++
+ /** Per-user, no-backup storage. The private key never leaves the GmsCompat process. */
+ object KeyboxStore {
+     private const val TAG = "PlayKeyboxStore"
+     private const val KEYBOX_FILE = "play_keybox.xml"
+     private const val ENABLED_FILE = "play_keybox.enabled"
++    private const val BOOTKEY_FILE = "play_keybox.bootkey"
++
++    // GrapheneOS' official husky (Pixel 8 Pro) verified boot key hash, reported with SelfSigned.
++    // User-provided; see the patch notes - verify against GrapheneOS' published husky AVB key and
++    // re-check on AVB key rotations.
++    private const val GRAPHENE_HUSKY_VBKEY_HEX =
++        "896DB2D09D84E1D6BB747002B8A114950B946E5825772A9D48BA7EB01D118C1C"
++    private const val VERIFIED_BOOT_STATE_SELF_SIGNED = 1
+ 
+     private val lock = Any()
+     private var loaded = false
+     private var parsed: PlayKeybox.ParsedKeybox? = null
+     private var enabled = false
++    // "original" | "graphene" | "custom:<64 hex>"; the verified boot key the rewrite reports.
++    private var bootKeyLine = "original"
+ 
+     private val ctx: Context
+         get() = App.ctx()
+ 
+     private fun keyboxFile() = File(ctx.noBackupFilesDir, KEYBOX_FILE)
+     private fun enabledFile() = File(ctx.noBackupFilesDir, ENABLED_FILE)
++    private fun bootKeyFile() = File(ctx.noBackupFilesDir, BOOTKEY_FILE)
+ 
+     private fun isUserUnlocked(): Boolean {
+         return ctx.getSystemService(UserManager::class.java)?.isUserUnlocked == true
+@@ -44,6 +60,7 @@ object KeyboxStore {
+         if (loaded || !isUserUnlocked()) return
+         loaded = true
+         enabled = runCatching { enabledFile().readText() == "1" }.getOrDefault(false)
++        bootKeyLine = runCatching { bootKeyFile().readText().trim() }.getOrDefault("original")
+         parsed = if (keyboxFile().isFile) {
+             try {
+                 // Expiry is checked when the feature is used, not treated as file corruption.
+@@ -103,8 +120,65 @@ object KeyboxStore {
+         parsed = null
+         enabled = false
+         loaded = true
++        bootKeyLine = "original"
+         AtomicFile(keyboxFile()).delete()
+         AtomicFile(enabledFile()).delete()
++        AtomicFile(bootKeyFile()).delete()
++    }
++
++    /** The verified boot key mode the rewrite reports (off = ORIGINAL, the device's real key). */
++    fun bootKeyConfig(): BootKeyConfig = synchronized(lock) {
++        ensureLoadedLocked()
++        parseBootKeyLine(bootKeyLine)
++    }
++
++    /** Persists the verified boot key mode. A CUSTOM mode needs a valid 64-hex key or it throws. */
++    fun setBootKeyConfig(mode: BootKeyMode, customHex: String?): BootKeyConfig = synchronized(lock) {
++        ensureLoadedLocked()
++        val line = when (mode) {
++            BootKeyMode.ORIGINAL -> "original"
++            BootKeyMode.GRAPHENE -> "graphene"
++            BootKeyMode.CUSTOM -> "custom:" + (normalizeHex(customHex)
++                ?: throw IllegalArgumentException("verified boot key must be 64 hex characters"))
++        }
++        writeAtomic(bootKeyFile(), line.toByteArray())
++        bootKeyLine = line
++        parseBootKeyLine(line)
++    }
++
++    private fun parseBootKeyLine(line: String): BootKeyConfig = when {
++        line == "graphene" -> BootKeyConfig(BootKeyMode.GRAPHENE, null)
++        line.startsWith("custom:") && normalizeHex(line.substring(7)) != null ->
++            BootKeyConfig(BootKeyMode.CUSTOM, normalizeHex(line.substring(7)))
++        else -> BootKeyConfig(BootKeyMode.ORIGINAL, null)
++    }
++
++    /** The RootOfTrust override for the current mode, or null for ORIGINAL (keep the real key). */
++    private fun resolveOverrideLocked(): PlayKeybox.BootOverride? {
++        val cfg = parseBootKeyLine(bootKeyLine)
++        return when (cfg.mode) {
++            BootKeyMode.ORIGINAL -> null
++            BootKeyMode.GRAPHENE -> parseHex(GRAPHENE_HUSKY_VBKEY_HEX)?.let {
++                PlayKeybox.BootOverride(it, VERIFIED_BOOT_STATE_SELF_SIGNED)
++            }
++            BootKeyMode.CUSTOM -> cfg.customHex?.let { parseHex(it) }?.let {
++                PlayKeybox.BootOverride(it, VERIFIED_BOOT_STATE_SELF_SIGNED)
++            }
++        }
++    }
++
++    /** 64 hex chars (any case, whitespace/colons ignored) normalized to uppercase, or null. */
++    private fun normalizeHex(input: String?): String? {
++        val cleaned = input?.filterNot { it.isWhitespace() || it == ':' }?.uppercase() ?: return null
++        if (cleaned.length != 64 || !cleaned.all { it in "0123456789ABCDEF" }) return null
++        return cleaned
++    }
++
++    private fun parseHex(hex: String): ByteArray? {
++        val norm = normalizeHex(hex) ?: return null
++        return ByteArray(32) {
++            ((norm[it * 2].digitToInt(16) shl 4) or norm[it * 2 + 1].digitToInt(16)).toByte()
++        }
+     }
+ 
+     /**
+@@ -117,7 +191,8 @@ object KeyboxStore {
+         val current = parsed
+         if (!enabled || current == null || !current.isValidNow()) return null
+         return try {
+-            val replacement = current.maybeRewrite(PlayKeybox.decodeChain(encodedChain))
++            val replacement = current.maybeRewrite(
++                PlayKeybox.decodeChain(encodedChain), resolveOverrideLocked())
+                 ?: return null
+             PlayKeybox.encodeChain(replacement)
+         } catch (e: Exception) {
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 15:48:30 +0100
+Subject: [PATCH] Play keybox: boot state + hash settings, Stock Google preset,
+ coherence prompt
+
+KeyboxStore now holds key mode (+Stock), state (Verified/SelfSigned) and hash
+mode in one bootcfg file. The keybox screen gains Verified boot state and
+Verified boot hash entries; picking a preset offers to match the state.
+---
+ res/values/strings.xml                        |  14 ++
+ .../gmscompat/keybox/KeyboxActivity.kt        | 175 ++++++++++++++++--
+ .../gmscompat/keybox/KeyboxStore.kt           | 140 ++++++++++----
+ 3 files changed, 271 insertions(+), 58 deletions(-)
+
+diff --git a/res/values/strings.xml b/res/values/strings.xml
+index 98bd3d21fdb81b2e5d1bea74c902eb6a9154ee9c..5281a31dae867809ef0de282659cd47754ca0184 100644
+--- a/res/values/strings.xml
++++ b/res/values/strings.xml
+@@ -272,11 +272,25 @@ Some carriers require an entitlement check (GSMA TS.43 with EAP-AKA authenticati
+     <string name="keybox_explanation">When this is on, Google Play services gets key attestations signed with your keybox instead of with this phone\'s own key, and they report a locked bootloader. By default only Google Play services is affected; you can extend this to other apps in Graphite settings.\n\nGoogle can still reject a keybox, so this doesn\'t guarantee that Play Integrity passes.\n\nThe keybox stays in this profile on this phone. It isn\'t backed up, and it\'s deleted when Google Play services is uninstalled.</string>
+     <string name="keybox_bootkey_title">Verified boot key</string>
+     <string name="keybox_bootkey_original">Original (no spoofing)</string>
++    <string name="keybox_bootkey_stock">Stock Google (Pixel 8 Pro)</string>
+     <string name="keybox_bootkey_graphene">GrapheneOS (Pixel 8 Pro)</string>
+     <string name="keybox_bootkey_custom">Custom…</string>
+     <string name="keybox_bootkey_custom_hint">64 hex characters (32 bytes)</string>
+     <string name="keybox_bootkey_custom_invalid">Enter 64 hex characters. Nothing was changed.</string>
+     <string name="keybox_bootkey_summary_original">Original (the device\'s real key)</string>
++    <string name="keybox_bootkey_summary_stock">Stock Google (Pixel 8 Pro)</string>
+     <string name="keybox_bootkey_summary_graphene">GrapheneOS (Pixel 8 Pro)</string>
+     <string name="keybox_bootkey_summary_custom">Custom: %1$s…</string>
++    <string name="keybox_bootstate_title">Verified boot state</string>
++    <string name="keybox_bootstate_verified">Verified (green)</string>
++    <string name="keybox_bootstate_selfsigned">Self-signed (yellow)</string>
++    <string name="keybox_boothash_title">Verified boot hash</string>
++    <string name="keybox_boothash_original">Original (no spoofing)</string>
++    <string name="keybox_boothash_custom">Custom…</string>
++    <string name="keybox_boothash_summary_original">Original (the device\'s real hash)</string>
++    <string name="keybox_boothash_summary_custom">Custom: %1$s…</string>
++    <string name="keybox_coherence_title">Match verified boot state?</string>
++    <string name="keybox_coherence_message">%1$s normally reports verified boot state “%2$s”. Change the state to match, or keep “%3$s” (a deliberate mismatch)?</string>
++    <string name="keybox_coherence_match">Match</string>
++    <string name="keybox_coherence_keep">Keep current</string>
+ </resources>
+diff --git a/src/app/grapheneos/gmscompat/keybox/KeyboxActivity.kt b/src/app/grapheneos/gmscompat/keybox/KeyboxActivity.kt
+index e844b89bef3e280d478b5053574bb3b1848bc1e1..3b0244bd6b4f7de78109690f098e7be5de31c7e6 100644
+--- a/src/app/grapheneos/gmscompat/keybox/KeyboxActivity.kt
++++ b/src/app/grapheneos/gmscompat/keybox/KeyboxActivity.kt
+@@ -39,6 +39,8 @@ class KeyboxFragment : PreferenceFragmentCompat() {
+     private lateinit var statusPref: Preference
+     private lateinit var importPref: Preference
+     private lateinit var bootKeyPref: Preference
++    private lateinit var bootStatePref: Preference
++    private lateinit var bootHashPref: Preference
+     private lateinit var clearPref: Preference
+     private val mainHandler = Handler(Looper.getMainLooper())
+ 
+@@ -110,6 +112,24 @@ class KeyboxFragment : PreferenceFragmentCompat() {
+         }
+         screen.addPreference(bootKeyPref)
+ 
++        bootStatePref = Preference(context).apply {
++            title = getString(R.string.keybox_bootstate_title)
++            setOnPreferenceClickListener {
++                showBootStateDialog()
++                true
++            }
++        }
++        screen.addPreference(bootStatePref)
++
++        bootHashPref = Preference(context).apply {
++            title = getString(R.string.keybox_boothash_title)
++            setOnPreferenceClickListener {
++                showBootHashDialog()
++                true
++            }
++        }
++        screen.addPreference(bootHashPref)
++
+         clearPref = Preference(context).apply {
+             title = getString(R.string.keybox_clear_title)
+             summary = getString(R.string.keybox_clear_summary)
+@@ -145,12 +165,22 @@ class KeyboxFragment : PreferenceFragmentCompat() {
+         enabledPref.isChecked = state.enabled && playInstalled
+         enabledPref.isEnabled = state.usable && playInstalled
+         clearPref.isEnabled = state.configured
+-        val boot = KeyboxStore.bootKeyConfig()
+-        bootKeyPref.summary = when (boot.mode) {
++        val boot = KeyboxStore.bootConfig()
++        bootKeyPref.summary = when (boot.keyMode) {
+             BootKeyMode.ORIGINAL -> getString(R.string.keybox_bootkey_summary_original)
++            BootKeyMode.STOCK -> getString(R.string.keybox_bootkey_summary_stock)
+             BootKeyMode.GRAPHENE -> getString(R.string.keybox_bootkey_summary_graphene)
+             BootKeyMode.CUSTOM -> getString(R.string.keybox_bootkey_summary_custom,
+-                boot.customHex?.take(16) ?: "")
++                boot.customKeyHex?.take(16) ?: "")
++        }
++        bootStatePref.summary = when (boot.state) {
++            BootState.VERIFIED -> getString(R.string.keybox_bootstate_verified)
++            BootState.SELFSIGNED -> getString(R.string.keybox_bootstate_selfsigned)
++        }
++        bootHashPref.summary = when (boot.hashMode) {
++            BootHashMode.ORIGINAL -> getString(R.string.keybox_boothash_summary_original)
++            BootHashMode.CUSTOM -> getString(R.string.keybox_boothash_summary_custom,
++                boot.customHashHex?.take(16) ?: "")
+         }
+         statusPref.title = when {
+             !playInstalled -> getString(R.string.keybox_play_missing)
+@@ -166,24 +196,27 @@ class KeyboxFragment : PreferenceFragmentCompat() {
+ 
+     private fun showBootKeyDialog() {
+         val context = requireContext()
+-        val current = KeyboxStore.bootKeyConfig()
++        val current = KeyboxStore.bootConfig()
+         val labels = arrayOf(
+             getString(R.string.keybox_bootkey_original),
++            getString(R.string.keybox_bootkey_stock),
+             getString(R.string.keybox_bootkey_graphene),
+             getString(R.string.keybox_bootkey_custom))
+-        val checked = when (current.mode) {
++        val checked = when (current.keyMode) {
+             BootKeyMode.ORIGINAL -> 0
+-            BootKeyMode.GRAPHENE -> 1
+-            BootKeyMode.CUSTOM -> 2
++            BootKeyMode.STOCK -> 1
++            BootKeyMode.GRAPHENE -> 2
++            BootKeyMode.CUSTOM -> 3
+         }
+         AlertDialog.Builder(context)
+             .setTitle(R.string.keybox_bootkey_title)
+             .setSingleChoiceItems(labels, checked) { dialog, which ->
+                 dialog.dismiss()
+                 when (which) {
+-                    0 -> applyBootKey(BootKeyMode.ORIGINAL, null)
+-                    1 -> applyBootKey(BootKeyMode.GRAPHENE, null)
+-                    else -> showCustomBootKeyDialog(current.customHex)
++                    0 -> applyKeyMode(BootKeyMode.ORIGINAL, null)
++                    1 -> applyKeyMode(BootKeyMode.STOCK, null)
++                    2 -> applyKeyMode(BootKeyMode.GRAPHENE, null)
++                    else -> showCustomBootKeyDialog(current.customKeyHex)
+                 }
+             }
+             .setNegativeButton(android.R.string.cancel, null)
+@@ -192,16 +225,12 @@ class KeyboxFragment : PreferenceFragmentCompat() {
+ 
+     private fun showCustomBootKeyDialog(prefill: String?) {
+         val context = requireContext()
+-        val input = EditText(context).apply {
+-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+-            hint = getString(R.string.keybox_bootkey_custom_hint)
+-            setText(prefill ?: "")
+-        }
++        val input = hexInput(prefill)
+         AlertDialog.Builder(context)
+             .setTitle(R.string.keybox_bootkey_custom)
+             .setView(input)
+             .setPositiveButton(android.R.string.ok) { _, _ ->
+-                if (!applyBootKey(BootKeyMode.CUSTOM, input.text.toString())) {
++                if (!applyKeyMode(BootKeyMode.CUSTOM, input.text.toString())) {
+                     Toast.makeText(context, R.string.keybox_bootkey_custom_invalid,
+                         Toast.LENGTH_LONG).show()
+                 }
+@@ -210,10 +239,118 @@ class KeyboxFragment : PreferenceFragmentCompat() {
+             .show()
+     }
+ 
+-    /** Persists the chosen mode; returns false if a CUSTOM key was rejected (nothing changed). */
+-    private fun applyBootKey(mode: BootKeyMode, customHex: String?): Boolean {
+-        val ok = runCatching { KeyboxStore.setBootKeyConfig(mode, customHex) }.isSuccess
++    /** Persists the key mode; returns false if a CUSTOM key was rejected (nothing changed). */
++    private fun applyKeyMode(mode: BootKeyMode, customHex: String?): Boolean {
++        val cur = KeyboxStore.bootConfig()
++        val ok = runCatching {
++            KeyboxStore.setBootConfig(cur.copy(keyMode = mode, customKeyHex = customHex))
++        }.isSuccess
+         refresh()
++        if (ok) maybeOfferCoherentState(mode)
+         return ok
+     }
++
++    /**
++     * Stock keys normally pair with Verified (green) and GrapheneOS with Self-signed (yellow).
++     * When the chosen preset's state doesn't match, offer to change it too, or keep the mismatch.
++     */
++    private fun maybeOfferCoherentState(mode: BootKeyMode) {
++        val coherent = when (mode) {
++            BootKeyMode.STOCK -> BootState.VERIFIED
++            BootKeyMode.GRAPHENE -> BootState.SELFSIGNED
++            else -> return
++        }
++        val cur = KeyboxStore.bootConfig()
++        if (cur.state == coherent) return
++        val presetLabel = getString(when (mode) {
++            BootKeyMode.STOCK -> R.string.keybox_bootkey_stock
++            else -> R.string.keybox_bootkey_graphene
++        })
++        val coherentLabel = getString(stateLabel(coherent))
++        val currentLabel = getString(stateLabel(cur.state))
++        AlertDialog.Builder(requireContext())
++            .setTitle(R.string.keybox_coherence_title)
++            .setMessage(getString(R.string.keybox_coherence_message,
++                presetLabel, coherentLabel, currentLabel))
++            .setPositiveButton(R.string.keybox_coherence_match) { _, _ ->
++                runCatching { KeyboxStore.setBootConfig(cur.copy(state = coherent)) }
++                refresh()
++            }
++            .setNegativeButton(R.string.keybox_coherence_keep, null)
++            .show()
++    }
++
++    private fun showBootStateDialog() {
++        val current = KeyboxStore.bootConfig()
++        val labels = arrayOf(
++            getString(R.string.keybox_bootstate_verified),
++            getString(R.string.keybox_bootstate_selfsigned))
++        val checked = if (current.state == BootState.SELFSIGNED) 1 else 0
++        AlertDialog.Builder(requireContext())
++            .setTitle(R.string.keybox_bootstate_title)
++            .setSingleChoiceItems(labels, checked) { dialog, which ->
++                dialog.dismiss()
++                val state = if (which == 1) BootState.SELFSIGNED else BootState.VERIFIED
++                runCatching { KeyboxStore.setBootConfig(current.copy(state = state)) }
++                refresh()
++            }
++            .setNegativeButton(android.R.string.cancel, null)
++            .show()
++    }
++
++    private fun showBootHashDialog() {
++        val current = KeyboxStore.bootConfig()
++        val labels = arrayOf(
++            getString(R.string.keybox_boothash_original),
++            getString(R.string.keybox_boothash_custom))
++        val checked = if (current.hashMode == BootHashMode.CUSTOM) 1 else 0
++        AlertDialog.Builder(requireContext())
++            .setTitle(R.string.keybox_boothash_title)
++            .setSingleChoiceItems(labels, checked) { dialog, which ->
++                dialog.dismiss()
++                if (which == 0) {
++                    runCatching {
++                        KeyboxStore.setBootConfig(current.copy(hashMode = BootHashMode.ORIGINAL))
++                    }
++                    refresh()
++                } else {
++                    showCustomHashDialog(current.customHashHex)
++                }
++            }
++            .setNegativeButton(android.R.string.cancel, null)
++            .show()
++    }
++
++    private fun showCustomHashDialog(prefill: String?) {
++        val context = requireContext()
++        val input = hexInput(prefill)
++        AlertDialog.Builder(context)
++            .setTitle(R.string.keybox_boothash_custom)
++            .setView(input)
++            .setPositiveButton(android.R.string.ok) { _, _ ->
++                val cur = KeyboxStore.bootConfig()
++                val ok = runCatching {
++                    KeyboxStore.setBootConfig(
++                        cur.copy(hashMode = BootHashMode.CUSTOM, customHashHex = input.text.toString()))
++                }.isSuccess
++                refresh()
++                if (!ok) {
++                    Toast.makeText(context, R.string.keybox_bootkey_custom_invalid,
++                        Toast.LENGTH_LONG).show()
++                }
++            }
++            .setNegativeButton(android.R.string.cancel, null)
++            .show()
++    }
++
++    private fun stateLabel(state: BootState): Int = when (state) {
++        BootState.VERIFIED -> R.string.keybox_bootstate_verified
++        BootState.SELFSIGNED -> R.string.keybox_bootstate_selfsigned
++    }
++
++    private fun hexInput(prefill: String?): EditText = EditText(requireContext()).apply {
++        inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
++        hint = getString(R.string.keybox_bootkey_custom_hint)
++        setText(prefill ?: "")
++    }
+ }
+diff --git a/src/app/grapheneos/gmscompat/keybox/KeyboxStore.kt b/src/app/grapheneos/gmscompat/keybox/KeyboxStore.kt
+index 8fe132f121cab6438bbaca767183bac3e5aa61ea..134663d2ed1b1fd141ecb3eac881e7e8cb14a861 100644
+--- a/src/app/grapheneos/gmscompat/keybox/KeyboxStore.kt
++++ b/src/app/grapheneos/gmscompat/keybox/KeyboxStore.kt
+@@ -19,38 +19,55 @@ data class KeyboxState(
+     val earliestExpiry: Date?,
+ )
+ 
+-/** Which verified boot key the re-signed attestation reports. See [KeyboxStore.bootKeyConfig]. */
+-enum class BootKeyMode { ORIGINAL, GRAPHENE, CUSTOM }
++/** Which verified boot key the re-signed attestation reports. See [KeyboxStore.bootConfig]. */
++enum class BootKeyMode { ORIGINAL, STOCK, GRAPHENE, CUSTOM }
+ 
+-data class BootKeyConfig(val mode: BootKeyMode, val customHex: String?)
++/** Reported verifiedBootState: VERIFIED is green (fully verified), SELFSIGNED is yellow. */
++enum class BootState { VERIFIED, SELFSIGNED }
++
++/** Whether the reported verifiedBootHash is the device's real one or a user-supplied value. */
++enum class BootHashMode { ORIGINAL, CUSTOM }
++
++data class BootConfig(
++    val keyMode: BootKeyMode,
++    val customKeyHex: String?,
++    val state: BootState,
++    val hashMode: BootHashMode,
++    val customHashHex: String?,
++)
+ 
+ /** Per-user, no-backup storage. The private key never leaves the GmsCompat process. */
+ object KeyboxStore {
+     private const val TAG = "PlayKeyboxStore"
+     private const val KEYBOX_FILE = "play_keybox.xml"
+     private const val ENABLED_FILE = "play_keybox.enabled"
+-    private const val BOOTKEY_FILE = "play_keybox.bootkey"
++    private const val BOOTCFG_FILE = "play_keybox.bootcfg"
+ 
+-    // GrapheneOS' official husky (Pixel 8 Pro) verified boot key hash, reported with SelfSigned.
+-    // User-provided; see the patch notes - verify against GrapheneOS' published husky AVB key and
+-    // re-check on AVB key rotations.
++    // Verified boot key hashes, user-provided; see the patch notes - verify against the published
++    // husky AVB keys and re-check on AVB key rotations. A wrong value only fails an allowlist; it
++    // never breaks attestation (lockRootOfTrust falls back to the real value on any problem).
+     private const val GRAPHENE_HUSKY_VBKEY_HEX =
+         "896DB2D09D84E1D6BB747002B8A114950B946E5825772A9D48BA7EB01D118C1C"
++    private const val STOCK_HUSKY_VBKEY_HEX =
++        "E5362DDF4676E8AA134DB520749BCB1F44FE6556F5E7BFAB130CB6343476FC15"
++    private const val VERIFIED_BOOT_STATE_VERIFIED = 0
+     private const val VERIFIED_BOOT_STATE_SELF_SIGNED = 1
+ 
++    private val DEFAULT_BOOT_CONFIG = BootConfig(
++        BootKeyMode.ORIGINAL, null, BootState.VERIFIED, BootHashMode.ORIGINAL, null)
++
+     private val lock = Any()
+     private var loaded = false
+     private var parsed: PlayKeybox.ParsedKeybox? = null
+     private var enabled = false
+-    // "original" | "graphene" | "custom:<64 hex>"; the verified boot key the rewrite reports.
+-    private var bootKeyLine = "original"
++    private var bootCfg = DEFAULT_BOOT_CONFIG
+ 
+     private val ctx: Context
+         get() = App.ctx()
+ 
+     private fun keyboxFile() = File(ctx.noBackupFilesDir, KEYBOX_FILE)
+     private fun enabledFile() = File(ctx.noBackupFilesDir, ENABLED_FILE)
+-    private fun bootKeyFile() = File(ctx.noBackupFilesDir, BOOTKEY_FILE)
++    private fun bootcfgFile() = File(ctx.noBackupFilesDir, BOOTCFG_FILE)
+ 
+     private fun isUserUnlocked(): Boolean {
+         return ctx.getSystemService(UserManager::class.java)?.isUserUnlocked == true
+@@ -60,7 +77,7 @@ object KeyboxStore {
+         if (loaded || !isUserUnlocked()) return
+         loaded = true
+         enabled = runCatching { enabledFile().readText() == "1" }.getOrDefault(false)
+-        bootKeyLine = runCatching { bootKeyFile().readText().trim() }.getOrDefault("original")
++        bootCfg = runCatching { parseBootCfg(bootcfgFile().readText()) }.getOrDefault(DEFAULT_BOOT_CONFIG)
+         parsed = if (keyboxFile().isFile) {
+             try {
+                 // Expiry is checked when the feature is used, not treated as file corruption.
+@@ -120,51 +137,96 @@ object KeyboxStore {
+         parsed = null
+         enabled = false
+         loaded = true
+-        bootKeyLine = "original"
++        bootCfg = DEFAULT_BOOT_CONFIG
+         AtomicFile(keyboxFile()).delete()
+         AtomicFile(enabledFile()).delete()
+-        AtomicFile(bootKeyFile()).delete()
++        AtomicFile(bootcfgFile()).delete()
+     }
+ 
+-    /** The verified boot key mode the rewrite reports (off = ORIGINAL, the device's real key). */
+-    fun bootKeyConfig(): BootKeyConfig = synchronized(lock) {
++    /** The verified boot fields the rewrite reports. Default = Original key/hash, Verified. */
++    fun bootConfig(): BootConfig = synchronized(lock) {
+         ensureLoadedLocked()
+-        parseBootKeyLine(bootKeyLine)
++        bootCfg
+     }
+ 
+-    /** Persists the verified boot key mode. A CUSTOM mode needs a valid 64-hex key or it throws. */
+-    fun setBootKeyConfig(mode: BootKeyMode, customHex: String?): BootKeyConfig = synchronized(lock) {
++    /**
++     * Persists [cfg]. A CUSTOM key or hash mode must carry a valid 64-hex value, otherwise this
++     * throws and nothing is changed.
++     */
++    fun setBootConfig(cfg: BootConfig): BootConfig = synchronized(lock) {
+         ensureLoadedLocked()
+-        val line = when (mode) {
++        val keyHex = if (cfg.keyMode == BootKeyMode.CUSTOM) {
++            normalizeHex(cfg.customKeyHex)
++                ?: throw IllegalArgumentException("verified boot key must be 64 hex characters")
++        } else null
++        val hashHex = if (cfg.hashMode == BootHashMode.CUSTOM) {
++            normalizeHex(cfg.customHashHex)
++                ?: throw IllegalArgumentException("verified boot hash must be 64 hex characters")
++        } else null
++        val normalized = cfg.copy(customKeyHex = keyHex, customHashHex = hashHex)
++        writeAtomic(bootcfgFile(), serializeBootCfg(normalized).toByteArray())
++        bootCfg = normalized
++        normalized
++    }
++
++    private fun serializeBootCfg(c: BootConfig): String = buildString {
++        append("key=").append(when (c.keyMode) {
+             BootKeyMode.ORIGINAL -> "original"
++            BootKeyMode.STOCK -> "stock"
+             BootKeyMode.GRAPHENE -> "graphene"
+-            BootKeyMode.CUSTOM -> "custom:" + (normalizeHex(customHex)
+-                ?: throw IllegalArgumentException("verified boot key must be 64 hex characters"))
+-        }
+-        writeAtomic(bootKeyFile(), line.toByteArray())
+-        bootKeyLine = line
+-        parseBootKeyLine(line)
++            BootKeyMode.CUSTOM -> "custom"
++        }).append('\n')
++        c.customKeyHex?.let { append("keyhex=").append(it).append('\n') }
++        append("state=")
++            .append(if (c.state == BootState.SELFSIGNED) "selfsigned" else "verified").append('\n')
++        append("hash=")
++            .append(if (c.hashMode == BootHashMode.CUSTOM) "custom" else "original").append('\n')
++        c.customHashHex?.let { append("hashhex=").append(it).append('\n') }
+     }
+ 
+-    private fun parseBootKeyLine(line: String): BootKeyConfig = when {
+-        line == "graphene" -> BootKeyConfig(BootKeyMode.GRAPHENE, null)
+-        line.startsWith("custom:") && normalizeHex(line.substring(7)) != null ->
+-            BootKeyConfig(BootKeyMode.CUSTOM, normalizeHex(line.substring(7)))
+-        else -> BootKeyConfig(BootKeyMode.ORIGINAL, null)
++    /** Parses the bootcfg file; any missing/invalid field degrades to its default, never throws. */
++    private fun parseBootCfg(text: String): BootConfig {
++        val m = HashMap<String, String>()
++        for (line in text.lineSequence()) {
++            val i = line.indexOf('=')
++            if (i > 0) m[line.substring(0, i).trim()] = line.substring(i + 1).trim()
++        }
++        val keyMode = when (m["key"]) {
++            "stock" -> BootKeyMode.STOCK
++            "graphene" -> BootKeyMode.GRAPHENE
++            "custom" -> BootKeyMode.CUSTOM
++            else -> BootKeyMode.ORIGINAL
++        }
++        val keyHex = normalizeHex(m["keyhex"])
++        val hashHex = normalizeHex(m["hashhex"])
++        val hashMode = if (m["hash"] == "custom") BootHashMode.CUSTOM else BootHashMode.ORIGINAL
++        return BootConfig(
++            if (keyMode == BootKeyMode.CUSTOM && keyHex == null) BootKeyMode.ORIGINAL else keyMode,
++            keyHex,
++            if (m["state"] == "selfsigned") BootState.SELFSIGNED else BootState.VERIFIED,
++            if (hashMode == BootHashMode.CUSTOM && hashHex == null) BootHashMode.ORIGINAL else hashMode,
++            hashHex,
++        )
+     }
+ 
+-    /** The RootOfTrust override for the current mode, or null for ORIGINAL (keep the real key). */
++    /** The RootOfTrust override for the current config, or null when it equals 0650's default. */
+     private fun resolveOverrideLocked(): PlayKeybox.BootOverride? {
+-        val cfg = parseBootKeyLine(bootKeyLine)
+-        return when (cfg.mode) {
++        val c = bootCfg
++        val keyBytes = when (c.keyMode) {
+             BootKeyMode.ORIGINAL -> null
+-            BootKeyMode.GRAPHENE -> parseHex(GRAPHENE_HUSKY_VBKEY_HEX)?.let {
+-                PlayKeybox.BootOverride(it, VERIFIED_BOOT_STATE_SELF_SIGNED)
+-            }
+-            BootKeyMode.CUSTOM -> cfg.customHex?.let { parseHex(it) }?.let {
+-                PlayKeybox.BootOverride(it, VERIFIED_BOOT_STATE_SELF_SIGNED)
+-            }
++            BootKeyMode.STOCK -> parseHex(STOCK_HUSKY_VBKEY_HEX)
++            BootKeyMode.GRAPHENE -> parseHex(GRAPHENE_HUSKY_VBKEY_HEX)
++            BootKeyMode.CUSTOM -> c.customKeyHex?.let { parseHex(it) }
++        }
++        val hashBytes =
++            if (c.hashMode == BootHashMode.CUSTOM) c.customHashHex?.let { parseHex(it) } else null
++        val stateInt = if (c.state == BootState.SELFSIGNED) VERIFIED_BOOT_STATE_SELF_SIGNED
++            else VERIFIED_BOOT_STATE_VERIFIED
++        // Original key + original hash + Verified is exactly 0650's behaviour; no override needed.
++        if (keyBytes == null && hashBytes == null && stateInt == VERIFIED_BOOT_STATE_VERIFIED) {
++            return null
+         }
++        return PlayKeybox.BootOverride(keyBytes, hashBytes, stateInt)
+     }
+ 
+     /** 64 hex chars (any case, whitespace/colons ignored) normalized to uppercase, or null. */

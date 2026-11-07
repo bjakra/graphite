@@ -1,0 +1,68 @@
+title = "Attestation verified boot key / hash / state override"
+description = """
+RELAXES ATTESTATION AUTHENTICITY (user approval 2026-11-07). Extends the keybox re-signer (0650) so
+the RootOfTrust it writes can report chosen verifiedBootKey, verifiedBootHash and verifiedBootState
+values instead of the device's real ones. Off by default (Original key + Original hash + Verified =
+exactly 0650's behaviour). Three per-user controls under the keybox screen:
+  - Verified boot key: Original (device's real key) / Stock Google (Pixel 8 Pro) / GrapheneOS
+    (Pixel 8 Pro) / Custom (32-byte, 64 hex). The two presets are published AVB key hashes.
+  - Verified boot state: Verified (green) or Self-signed (yellow). deviceLocked is always reported
+    locked, as in 0650. Picking a key preset prompts to match the coherent state (Stock->Verified,
+    GrapheneOS->Self-signed) or to keep a deliberate mismatch.
+  - Verified boot hash: Original (device's real hash) or Custom (32-byte, 64 hex).
+This only changes what the re-signed attestation certificate says; the device's actual verified boot
+is untouched. It rides the SAME re-sign as 0650, so it is only in effect while a valid keybox is
+configured and enabled (these fields live inside the TEE-signed leaf and cannot change without
+re-signing, which needs the keybox) and it applies wherever 0650 re-signs (sandboxed Play services,
+and other apps when "apply to all apps" is on). A revoked keybox still works for this, because the
+re-sign never checks revocation; it has no effect on checks that consult Google's attestation status
+list (Play Integrity, or a verifier that fetches/bundles the CRL). It targets offline verifiers that
+validate the chain to Google's root and read these RootOfTrust fields from the attestation.
+
+frameworks/base: PlayKeybox.BootOverride carries optional 32-byte verifiedBootKey and
+verifiedBootHash plus a verifiedBootState; ParsedKeybox.maybeRewrite(chain, override) threads it into
+lockBootState -> lockAuthorizationList -> lockRootOfTrust, which substitutes each field it is given
+and leaves the rest real (deviceLocked stays true). maybeRewrite(chain) still exists and equals
+override = null, so 0650/0651 callers and tests are unchanged. Tests:
+PlayKeyboxTest.reSignCanOverrideVerifiedBootKeyAndState.
+packages/apps/GmsCompat: KeyboxStore persists the config (key mode + custom hex, state, hash mode +
+custom hex) as one 0600 no-backup file with the same per-user lifecycle as the keybox (deleted on
+clear and on Play removal), resolves it to a BootOverride inside its own process, and passes it to
+maybeRewrite. The husky preset key bytes live here, not in frameworks/base. KeyboxActivity's keybox
+screen gains "Verified boot key", "Verified boot state" and "Verified boot hash" entries. Surfaced
+from Graphite settings through the existing "Manage keybox" link.
+"""
+# false = the ROM still builds and works without it; build.sh may skip it on failure
+required = false
+skip_impact = "No verified boot key override; the re-signed attestation reports the device's real boot key, so verifiers that allowlist a specific verifiedBootKey (offline Auditor-style / RASP checks) keep rejecting this device."
+category = "feature"
+depends = ["0650-play-keybox", "0651-attestation-status"]
+enabled = true
+notes = """
+Layers on 0650 (reuses PlayKeybox.ParsedKeybox.maybeRewrite and GmsCompat's KeyboxStore); applied in
+id order after it, same two projects, like 0651 does. The Stock Google (E5362DDF...) and GrapheneOS
+(896DB2D0...) husky verifiedBootKey constants are user-provided; verify them against the published
+husky AVB keys and re-check on AVB key rotations (a wrong value just fails the allowlist, it never
+breaks attestation: lockRootOfTrust falls back to the real value on any parse problem). Only in
+effect with a valid, enabled keybox - the fields are inside the TEE-signed leaf, so changing them
+requires re-signing, which needs the keybox; the UI says so. Custom key and hash must each be exactly
+32 bytes (over-long keys are hashed by KeyMint on real hardware; we reject instead of hashing to keep
+the input unambiguous). Emulator note: the emulator's KeyMint uses the AOSP software
+attestation root and there is no real keybox, so only the PlayKeyboxTest rewrite logic is testable
+there, not real-world acceptance. Test: ./dev.sh adb shell am instrument -w -e class
+com.android.internal.gmscompat.PlayKeyboxTest
+com.android.frameworks.coretests/androidx.test.runner.AndroidJUnitRunner
+"""
+
+# One [[change]] per patched project. Add them with:
+#   tools/patchctl export 0660-attested-vbkey --project <path> --new
+
+
+
+[[change]]
+project = "frameworks/base"
+file = "frameworks_base.patch"
+
+[[change]]
+project = "packages/apps/GmsCompat"
+file = "packages_apps_GmsCompat.patch"

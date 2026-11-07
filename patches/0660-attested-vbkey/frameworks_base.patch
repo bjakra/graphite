@@ -1,0 +1,377 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 15:23:23 +0100
+Subject: [PATCH] gmscompat: optional verified boot key override in the keybox
+ re-signer
+
+PlayKeybox.BootOverride lets ParsedKeybox.maybeRewrite report a chosen
+verifiedBootKey / verifiedBootState in the re-signed RootOfTrust instead of the
+device's real values; the no-arg maybeRewrite is unchanged (override = null).
+---
+ .../internal/gmscompat/PlayKeybox.java        | 67 ++++++++++++++++---
+ .../internal/gmscompat/PlayKeyboxTest.java    | 66 +++++++++++++++++-
+ 2 files changed, 120 insertions(+), 13 deletions(-)
+
+diff --git a/core/java/com/android/internal/gmscompat/PlayKeybox.java b/core/java/com/android/internal/gmscompat/PlayKeybox.java
+index 5308da01bd71b5843faed908f0e23e8ea623251a..f16cf0b60ce440856a3c58519ee01e5729b0a589 100644
+--- a/core/java/com/android/internal/gmscompat/PlayKeybox.java
++++ b/core/java/com/android/internal/gmscompat/PlayKeybox.java
+@@ -92,6 +92,31 @@ public final class PlayKeybox {
+ 
+     private PlayKeybox() {}
+ 
++    /**
++     * Optional overrides for the RootOfTrust written into a re-signed attestation leaf. A null
++     * {@link #verifiedBootKey} keeps the device's real key and a negative {@link #verifiedBootState}
++     * keeps the default (Verified); deviceLocked is always reported true. Constructed in the
++     * GmsCompat process from the user's per-user setting and passed to {@link
++     * ParsedKeybox#maybeRewrite(Certificate[], BootOverride)}.
++     */
++    public static final class BootOverride {
++        /** 32-byte verifiedBootKey to report, or null to keep the device's real key. */
++        public final byte[] verifiedBootKey;
++        /**
++         * verifiedBootState to report (0 Verified, 1 SelfSigned, 2 Unverified, 3 Failed), or a
++         * negative value to keep the default (Verified).
++         */
++        public final int verifiedBootState;
++
++        public BootOverride(byte[] verifiedBootKey, int verifiedBootState) {
++            if (verifiedBootKey != null && verifiedBootKey.length != 32) {
++                throw new IllegalArgumentException("verifiedBootKey must be 32 bytes");
++            }
++            this.verifiedBootKey = verifiedBootKey == null ? null : verifiedBootKey.clone();
++            this.verifiedBootState = verifiedBootState;
++        }
++    }
++
+     /** An immutable, fully validated keybox. */
+     public static final class ParsedKeybox {
+         private final Map<String, Keybox> keyboxes;
+@@ -134,6 +159,17 @@ public final class PlayKeybox {
+          *         if the input is not an Android key-attestation chain
+          */
+         public Certificate[] maybeRewrite(Certificate[] chain) throws Exception {
++            return maybeRewrite(chain, null);
++        }
++
++        /**
++         * As {@link #maybeRewrite(Certificate[])}, but the RootOfTrust written into the re-signed
++         * leaf reports {@code override}'s verifiedBootKey / verifiedBootState when they are set. A
++         * null override is identical to {@link #maybeRewrite(Certificate[])}: the device's real
++         * boot key is kept and the state is Verified.
++         */
++        public Certificate[] maybeRewrite(Certificate[] chain, BootOverride override)
++                throws Exception {
+             if (chain == null || chain.length < 2 || !(chain[0] instanceof X509Certificate)) {
+                 return null;
+             }
+@@ -177,7 +213,7 @@ public final class PlayKeybox {
+                 if (ATTESTATION_EXTENSION_OID.equals(oid.toString())) {
+                     // Report a locked bootloader and verified boot; without this the re-signed
+                     // chain still carries the device's real (unlocked) boot state and fails.
+-                    extension = lockBootState(extension);
++                    extension = lockBootState(extension, override);
+                 }
+                 builder.addExtension(extension);
+             }
+@@ -205,11 +241,12 @@ public final class PlayKeybox {
+ 
+     /**
+      * Rewrites the Android key-attestation record so RootOfTrust reads deviceLocked = true and
+-     * verifiedBootState = Verified, keeping the real verified-boot key and hash. The challenge,
+-     * attested key and every other field are untouched. On any parsing problem the original
+-     * extension is returned unchanged, so attestation never breaks.
++     * verifiedBootState = Verified, keeping the real verified-boot key and hash. When {@code
++     * override} is non-null, the verifiedBootKey and/or verifiedBootState it specifies are reported
++     * instead. The challenge, attested key and every other field are untouched. On any parsing
++     * problem the original extension is returned unchanged, so attestation never breaks.
+      */
+-    private static Extension lockBootState(Extension attestation) {
++    private static Extension lockBootState(Extension attestation, BootOverride override) {
+         try {
+             ASN1Sequence keyDescription =
+                     ASN1Sequence.getInstance(attestation.getExtnValue().getOctets());
+@@ -219,7 +256,7 @@ public final class PlayKeybox {
+                 if (!(fields[i] instanceof ASN1Sequence)) {
+                     continue; // only the software/tee AuthorizationLists are sequences
+                 }
+-                ASN1Sequence locked = lockAuthorizationList((ASN1Sequence) fields[i]);
++                ASN1Sequence locked = lockAuthorizationList((ASN1Sequence) fields[i], override);
+                 if (locked != null) {
+                     fields[i] = locked;
+                     changed = true;
+@@ -236,14 +273,15 @@ public final class PlayKeybox {
+         }
+     }
+ 
+-    private static ASN1Sequence lockAuthorizationList(ASN1Sequence authorizationList) {
++    private static ASN1Sequence lockAuthorizationList(ASN1Sequence authorizationList,
++            BootOverride override) {
+         ASN1EncodableVector out = new ASN1EncodableVector();
+         boolean found = false;
+         for (ASN1Encodable element : authorizationList) {
+             ASN1TaggedObject tagged = ASN1TaggedObject.getInstance(element);
+             if (tagged.getTagNo() == ROOT_OF_TRUST_TAG) {
+                 ASN1Sequence rot = ASN1Sequence.getInstance(tagged.getBaseObject());
+-                out.add(new DERTaggedObject(ROOT_OF_TRUST_TAG, lockRootOfTrust(rot)));
++                out.add(new DERTaggedObject(ROOT_OF_TRUST_TAG, lockRootOfTrust(rot, override)));
+                 found = true;
+             } else {
+                 out.add(tagged);
+@@ -252,7 +290,7 @@ public final class PlayKeybox {
+         return found ? new DERSequence(out) : null;
+     }
+ 
+-    private static ASN1Sequence lockRootOfTrust(ASN1Sequence rootOfTrust) {
++    private static ASN1Sequence lockRootOfTrust(ASN1Sequence rootOfTrust, BootOverride override) {
+         byte[] bootKey = new byte[32];
+         try {
+             bootKey = ASN1OctetString.getInstance(rootOfTrust.getObjectAt(0)).getOctets();
+@@ -266,10 +304,19 @@ public final class PlayKeybox {
+             } catch (Exception ignored) {
+             }
+         }
++        int bootState = VERIFIED_BOOT_STATE_VERIFIED;
++        if (override != null) {
++            if (override.verifiedBootKey != null) {
++                bootKey = override.verifiedBootKey;
++            }
++            if (override.verifiedBootState >= 0) {
++                bootState = override.verifiedBootState;
++            }
++        }
+         ASN1EncodableVector locked = new ASN1EncodableVector();
+         locked.add(new DEROctetString(bootKey));
+         locked.add(ASN1Boolean.TRUE);
+-        locked.add(new ASN1Enumerated(VERIFIED_BOOT_STATE_VERIFIED));
++        locked.add(new ASN1Enumerated(bootState));
+         if (hasHash) {
+             locked.add(new DEROctetString(bootHash));
+         }
+diff --git a/core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java b/core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java
+index 72c97ae4e57f3d1b67f8db7b4d677cac45846021..b5394d0caac4eae7e16e5c84024942bdcab9f526 100644
+--- a/core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java
++++ b/core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java
+@@ -115,6 +115,53 @@ public class PlayKeyboxTest {
+         assertNull(PlayKeybox.readAttestation(plain));
+     }
+ 
++    @Test
++    public void reSignCanOverrideVerifiedBootKeyAndState() throws Exception {
++        KeyboxMaterial keybox = createKeybox("EC");
++        String xml = xml("ecdsa", keybox.issuerKey.getPrivate().getEncoded(),
++                new X509Certificate[] { keybox.issuer, keybox.root });
++        PlayKeybox.ParsedKeybox parsed = PlayKeybox.parse(xml.getBytes());
++
++        KeyPair issuerKey = keyPair("EC");
++        X509Certificate issuer = certificate("Real issuer", "Real issuer", issuerKey.getPublic(),
++                issuerKey.getPrivate(), issuerKey.getPublic(), false);
++        KeyPair appKey = keyPair("EC");
++        X509Certificate leaf = certificate("Real leaf", "Real issuer", appKey.getPublic(),
++                issuerKey.getPrivate(), issuerKey.getPublic(), true);
++
++        byte[] customKey = new byte[32];
++        for (int i = 0; i < customKey.length; i++) {
++            customKey[i] = (byte) (i + 1);
++        }
++
++        // A chosen boot key with verifiedBootState = SelfSigned (1).
++        Certificate[] rewritten = parsed.maybeRewrite(new Certificate[] { leaf, issuer },
++                new PlayKeybox.BootOverride(customKey, 1));
++        X509Certificate replacement = (X509Certificate) rewritten[0];
++        assertArrayEquals("verifiedBootKey overridden", customKey, verifiedBootKeyOf(replacement));
++        assertEquals("verifiedBootState SelfSigned", 1, verifiedBootStateOf(replacement));
++        assertEquals("deviceLocked stays true", true, rootOfTrust(replacement)[0]);
++        // The attested application key is still the caller's own key.
++        assertArrayEquals(appKey.getPublic().getEncoded(),
++                replacement.getPublicKey().getEncoded());
++
++        // A null override keeps the device's real key (zeros in attestationRecord) and Verified.
++        X509Certificate leaf2 = certificate("Real leaf", "Real issuer", appKey.getPublic(),
++                issuerKey.getPrivate(), issuerKey.getPublic(), true);
++        X509Certificate def = (X509Certificate)
++                parsed.maybeRewrite(new Certificate[] { leaf2, issuer }, null)[0];
++        assertArrayEquals("real key kept", new byte[32], verifiedBootKeyOf(def));
++        assertEquals("default Verified", 0, verifiedBootStateOf(def));
++
++        // A boot key that is not 32 bytes is rejected before any signing happens.
++        try {
++            new PlayKeybox.BootOverride(new byte[31], 1);
++            fail("Expected a 31-byte verifiedBootKey to be rejected");
++        } catch (IllegalArgumentException expected) {
++            // Expected.
++        }
++    }
++
+     @Test
+     public void mismatchedPrivateKeyIsRejected() throws Exception {
+         KeyboxMaterial keybox = createKeybox("EC");
+@@ -223,19 +270,32 @@ public class PlayKeyboxTest {
+         return new DERSequence(keyDescription).getEncoded();
+     }
+ 
+-    /** Returns { deviceLocked, verifiedBootState == Verified } from a leaf's attestation. */
+-    private static boolean[] rootOfTrust(X509Certificate leaf) throws Exception {
++    /** The bare RootOfTrust SEQUENCE out of a leaf's teeEnforced attestation. */
++    private static ASN1Sequence rotSequence(X509Certificate leaf) throws Exception {
+         byte[] octets = ASN1OctetString.getInstance(
+                 leaf.getExtensionValue(PlayKeybox.ATTESTATION_EXTENSION_OID)).getOctets();
+         ASN1Sequence keyDescription = ASN1Sequence.getInstance(octets);
+         ASN1Sequence tee = (ASN1Sequence) keyDescription.getObjectAt(7);
+         ASN1TaggedObject tagged = ASN1TaggedObject.getInstance(tee.getObjectAt(0));
+-        ASN1Sequence rot = ASN1Sequence.getInstance(tagged.getBaseObject());
++        return ASN1Sequence.getInstance(tagged.getBaseObject());
++    }
++
++    /** Returns { deviceLocked, verifiedBootState == Verified } from a leaf's attestation. */
++    private static boolean[] rootOfTrust(X509Certificate leaf) throws Exception {
++        ASN1Sequence rot = rotSequence(leaf);
+         boolean locked = ASN1Boolean.getInstance(rot.getObjectAt(1)).isTrue();
+         int state = ASN1Enumerated.getInstance(rot.getObjectAt(2)).getValue().intValue();
+         return new boolean[] { locked, state == 0 };
+     }
+ 
++    private static byte[] verifiedBootKeyOf(X509Certificate leaf) throws Exception {
++        return ASN1OctetString.getInstance(rotSequence(leaf).getObjectAt(0)).getOctets();
++    }
++
++    private static int verifiedBootStateOf(X509Certificate leaf) throws Exception {
++        return ASN1Enumerated.getInstance(rotSequence(leaf).getObjectAt(2)).getValue().intValue();
++    }
++
+     private static String pem(String type, byte[] der) {
+         return "-----BEGIN " + type + "-----\n"
+                 + Base64.getMimeEncoder(64, new byte[] { '\n' }).encodeToString(der)
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bjarne <87858321+bjakra@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 15:48:30 +0100
+Subject: [PATCH] gmscompat: verified boot hash override + selectable boot
+ state
+
+BootOverride gains a nullable verifiedBootHash (32-byte checked); lockRootOfTrust
+substitutes it when present. verifiedBootState is already carried; the test now
+covers key+hash override, key-only+Verified, and hash length rejection.
+---
+ .../internal/gmscompat/PlayKeybox.java        | 12 ++++++-
+ .../internal/gmscompat/PlayKeyboxTest.java    | 36 +++++++++++++++----
+ 2 files changed, 41 insertions(+), 7 deletions(-)
+
+diff --git a/core/java/com/android/internal/gmscompat/PlayKeybox.java b/core/java/com/android/internal/gmscompat/PlayKeybox.java
+index f16cf0b60ce440856a3c58519ee01e5729b0a589..43af72cc993922d67426b02ca8640e0b30db3233 100644
+--- a/core/java/com/android/internal/gmscompat/PlayKeybox.java
++++ b/core/java/com/android/internal/gmscompat/PlayKeybox.java
+@@ -102,17 +102,24 @@ public final class PlayKeybox {
+     public static final class BootOverride {
+         /** 32-byte verifiedBootKey to report, or null to keep the device's real key. */
+         public final byte[] verifiedBootKey;
++        /** 32-byte verifiedBootHash to report, or null to keep the device's real hash. */
++        public final byte[] verifiedBootHash;
+         /**
+          * verifiedBootState to report (0 Verified, 1 SelfSigned, 2 Unverified, 3 Failed), or a
+          * negative value to keep the default (Verified).
+          */
+         public final int verifiedBootState;
+ 
+-        public BootOverride(byte[] verifiedBootKey, int verifiedBootState) {
++        public BootOverride(byte[] verifiedBootKey, byte[] verifiedBootHash,
++                int verifiedBootState) {
+             if (verifiedBootKey != null && verifiedBootKey.length != 32) {
+                 throw new IllegalArgumentException("verifiedBootKey must be 32 bytes");
+             }
++            if (verifiedBootHash != null && verifiedBootHash.length != 32) {
++                throw new IllegalArgumentException("verifiedBootHash must be 32 bytes");
++            }
+             this.verifiedBootKey = verifiedBootKey == null ? null : verifiedBootKey.clone();
++            this.verifiedBootHash = verifiedBootHash == null ? null : verifiedBootHash.clone();
+             this.verifiedBootState = verifiedBootState;
+         }
+     }
+@@ -309,6 +316,9 @@ public final class PlayKeybox {
+             if (override.verifiedBootKey != null) {
+                 bootKey = override.verifiedBootKey;
+             }
++            if (override.verifiedBootHash != null && hasHash) {
++                bootHash = override.verifiedBootHash;
++            }
+             if (override.verifiedBootState >= 0) {
+                 bootState = override.verifiedBootState;
+             }
+diff --git a/core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java b/core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java
+index b5394d0caac4eae7e16e5c84024942bdcab9f526..0289ac8d2799b281cc0ebfeb7133f51d2d2d1530 100644
+--- a/core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java
++++ b/core/tests/coretests/src/com/android/internal/gmscompat/PlayKeyboxTest.java
+@@ -130,22 +130,36 @@ public class PlayKeyboxTest {
+                 issuerKey.getPrivate(), issuerKey.getPublic(), true);
+ 
+         byte[] customKey = new byte[32];
+-        for (int i = 0; i < customKey.length; i++) {
++        byte[] customHash = new byte[32];
++        for (int i = 0; i < 32; i++) {
+             customKey[i] = (byte) (i + 1);
++            customHash[i] = (byte) (0x40 + i);
+         }
+ 
+-        // A chosen boot key with verifiedBootState = SelfSigned (1).
++        // A chosen key + hash with verifiedBootState = SelfSigned (1).
+         Certificate[] rewritten = parsed.maybeRewrite(new Certificate[] { leaf, issuer },
+-                new PlayKeybox.BootOverride(customKey, 1));
++                new PlayKeybox.BootOverride(customKey, customHash, 1));
+         X509Certificate replacement = (X509Certificate) rewritten[0];
+         assertArrayEquals("verifiedBootKey overridden", customKey, verifiedBootKeyOf(replacement));
++        assertArrayEquals("verifiedBootHash overridden", customHash,
++                verifiedBootHashOf(replacement));
+         assertEquals("verifiedBootState SelfSigned", 1, verifiedBootStateOf(replacement));
+         assertEquals("deviceLocked stays true", true, rootOfTrust(replacement)[0]);
+         // The attested application key is still the caller's own key.
+         assertArrayEquals(appKey.getPublic().getEncoded(),
+                 replacement.getPublicKey().getEncoded());
+ 
+-        // A null override keeps the device's real key (zeros in attestationRecord) and Verified.
++        // Key-only override (null hash) keeps the real hash but can still force Verified (green).
++        X509Certificate leafK = certificate("Real leaf", "Real issuer", appKey.getPublic(),
++                issuerKey.getPrivate(), issuerKey.getPublic(), true);
++        X509Certificate keyOnly = (X509Certificate) parsed.maybeRewrite(
++                new Certificate[] { leafK, issuer },
++                new PlayKeybox.BootOverride(customKey, null, 0))[0];
++        assertArrayEquals("key overridden", customKey, verifiedBootKeyOf(keyOnly));
++        assertArrayEquals("real hash kept", new byte[32], verifiedBootHashOf(keyOnly));
++        assertEquals("verifiedBootState Verified", 0, verifiedBootStateOf(keyOnly));
++
++        // A null override keeps the device's real key/hash (zeros here) and Verified.
+         X509Certificate leaf2 = certificate("Real leaf", "Real issuer", appKey.getPublic(),
+                 issuerKey.getPrivate(), issuerKey.getPublic(), true);
+         X509Certificate def = (X509Certificate)
+@@ -153,13 +167,19 @@ public class PlayKeyboxTest {
+         assertArrayEquals("real key kept", new byte[32], verifiedBootKeyOf(def));
+         assertEquals("default Verified", 0, verifiedBootStateOf(def));
+ 
+-        // A boot key that is not 32 bytes is rejected before any signing happens.
++        // Keys / hashes that are not 32 bytes are rejected before any signing happens.
+         try {
+-            new PlayKeybox.BootOverride(new byte[31], 1);
++            new PlayKeybox.BootOverride(new byte[31], null, 1);
+             fail("Expected a 31-byte verifiedBootKey to be rejected");
+         } catch (IllegalArgumentException expected) {
+             // Expected.
+         }
++        try {
++            new PlayKeybox.BootOverride(null, new byte[31], 1);
++            fail("Expected a 31-byte verifiedBootHash to be rejected");
++        } catch (IllegalArgumentException expected) {
++            // Expected.
++        }
+     }
+ 
+     @Test
+@@ -292,6 +312,10 @@ public class PlayKeyboxTest {
+         return ASN1OctetString.getInstance(rotSequence(leaf).getObjectAt(0)).getOctets();
+     }
+ 
++    private static byte[] verifiedBootHashOf(X509Certificate leaf) throws Exception {
++        return ASN1OctetString.getInstance(rotSequence(leaf).getObjectAt(3)).getOctets();
++    }
++
+     private static int verifiedBootStateOf(X509Certificate leaf) throws Exception {
+         return ASN1Enumerated.getInstance(rotSequence(leaf).getObjectAt(2)).getValue().intValue();
+     }
